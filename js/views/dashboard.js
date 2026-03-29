@@ -1,7 +1,7 @@
 import { Store } from '../store.js';
 import { navigate } from '../router.js';
 import { fmtDate, timeAgo, fmtDuration, today } from '../utils.js';
-import { EXERCISES_MAP, MUSCLE_LABELS } from '../data/exercises.js';
+import { EXERCISES_MAP, MUSCLE_LABELS } from '../data/exercises.js?v=5';
 import { logout } from '../app.js';
 
 export function renderDashboard() {
@@ -25,6 +25,7 @@ export function renderDashboard() {
 
   const lastLog = recentLogs[0] || null;
   const lastWorkout = lastLog ? workouts.find(w => w.id === lastLog.workout_id) : null;
+  const weekStats = Store.getWeeklyStats();
 
   const view = document.getElementById('view');
   view.innerHTML = `
@@ -49,6 +50,8 @@ export function renderDashboard() {
       </header>
 
       ${activeSession ? _resumeCard(activeSession, workouts) : ''}
+
+      ${_weekSection(weekStats)}
 
       ${lastWorkout ? `
         <section class="section">
@@ -97,7 +100,7 @@ export function renderDashboard() {
   });
 
   document.querySelectorAll('[data-view-workout]').forEach(btn => {
-    btn.addEventListener('click', () => navigate(`/workouts/${btn.dataset.viewWorkout}`));
+    btn.addEventListener('click', () => navigate(`/workouts/${btn.dataset.viewWorkout}/plan`));
   });
 
   document.getElementById('resume-session-btn')?.addEventListener('click', () => {
@@ -110,6 +113,70 @@ export function renderDashboard() {
       renderDashboard();
     }
   });
+
+  document.getElementById('bw-save-btn')?.addEventListener('click', async () => {
+    const input = document.getElementById('bw-input');
+    const val = parseFloat(input?.value);
+    if (!val || val <= 0) return;
+    await Store.addBodyweight(val);
+    renderDashboard();
+  });
+
+  document.getElementById('bw-input')?.addEventListener('keydown', e => {
+    if (e.key === 'Enter') document.getElementById('bw-save-btn')?.click();
+  });
+}
+
+function _weekSection(stats) {
+  const { thisWeek, prevWeek, latestBodyweight } = stats;
+  const volumeDelta = prevWeek.volume > 0
+    ? Math.round(((thisWeek.volume - prevWeek.volume) / prevWeek.volume) * 100)
+    : null;
+  const volSign = volumeDelta > 0 ? '+' : '';
+  const volColor = volumeDelta > 0 ? 'green' : volumeDelta < 0 ? 'red' : '';
+
+  const fmtVol = v => v >= 1000 ? (v / 1000).toFixed(1) + 'k' : v.toString();
+
+  return `
+    <section class="section">
+      <h2 class="section__title">This Week</h2>
+      <div class="week-stats">
+        <div class="week-stat">
+          <div class="week-stat__value">${thisWeek.workouts}</div>
+          <div class="week-stat__label">Workouts</div>
+          ${prevWeek.workouts > 0 ? `<div class="week-stat__delta">vs ${prevWeek.workouts} last wk</div>` : ''}
+        </div>
+        <div class="week-stat">
+          <div class="week-stat__value">${thisWeek.sets}</div>
+          <div class="week-stat__label">Sets</div>
+        </div>
+        <div class="week-stat">
+          <div class="week-stat__value">${fmtVol(thisWeek.volume)}</div>
+          <div class="week-stat__label">Volume kg</div>
+          ${volumeDelta !== null ? `<div class="week-stat__delta week-stat__delta--${volColor}">${volSign}${volumeDelta}%</div>` : ''}
+        </div>
+      </div>
+      <div class="bw-row">
+        <div class="bw-row__current">
+          ${latestBodyweight
+            ? `<span class="bw-row__label">Weight</span>
+               <span class="bw-row__value">${latestBodyweight.weight}kg</span>`
+            : `<span class="bw-row__label">Body weight</span>`
+          }
+        </div>
+        <div class="bw-row__input">
+          <input
+            type="number"
+            id="bw-input"
+            class="bw-input"
+            placeholder="${latestBodyweight ? latestBodyweight.weight : '70'}kg"
+            min="20" max="300" step="0.1"
+          />
+          <button class="btn btn--ghost btn--sm" id="bw-save-btn">Log</button>
+        </div>
+      </div>
+    </section>
+  `;
 }
 
 function _greeting() {

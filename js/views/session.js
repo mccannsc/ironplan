@@ -9,14 +9,73 @@ import {
   uid, fmtWeight, today, fmtDuration, esc, clamp,
 } from '../utils.js';
 import {
-  EXERCISES_MAP, MUSCLE_LABELS, EQUIPMENT_LABELS, getSubstitutions, checkOverload, suggestWeight,
-} from '../data/exercises.js';
+  EXERCISES_MAP, MUSCLE_LABELS, EQUIPMENT_LABELS, getSubstitutions, checkOverload, suggestWeight, getNextWeight,
+} from '../data/exercises.js?v=5';
 import { toast } from '../components/toast.js';
 import { openModal, closeModal } from '../components/modal.js';
+import { showSummary } from './summary.js';
 
 let _timerInterval = null;
+let _restInterval = null;
+const _sessionPBs = new Set(); // exercise IDs that hit a new PB this session
+
+// ─── Rest Timer ─────────────────────────────────────────────────────────────
+
+function _getRestDuration(ex) {
+  const compound = ['push', 'pull', 'squat', 'hinge'];
+  if (compound.includes(ex?.pattern)) return 120;
+  if (ex?.pattern === 'isolation') return 90;
+  return 60;
+}
+
+function _startRestTimer(duration) {
+  _clearRestTimer();
+  let remaining = duration;
+  let el = document.getElementById('rest-timer');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'rest-timer';
+    el.className = 'rest-timer';
+    document.getElementById('app').appendChild(el);
+  }
+
+  function update() {
+    const pct = (remaining / duration) * 100;
+    el.innerHTML = `
+      <div class="rest-timer__inner">
+        <div class="rest-timer__info">
+          <span class="rest-timer__label">Rest</span>
+          <span class="rest-timer__count">${remaining}s</span>
+        </div>
+        <div class="rest-timer__bar-wrap">
+          <div class="rest-timer__bar" style="width:${pct}%"></div>
+        </div>
+        <button class="rest-timer__skip" id="rest-skip-btn">Skip</button>
+      </div>
+    `;
+    document.getElementById('rest-skip-btn')?.addEventListener('click', _clearRestTimer);
+  }
+
+  update();
+  _restInterval = setInterval(() => {
+    remaining--;
+    if (remaining <= 0) {
+      _clearRestTimer();
+      if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
+    } else {
+      update();
+    }
+  }, 1000);
+}
+
+function _clearRestTimer() {
+  if (_restInterval) { clearInterval(_restInterval); _restInterval = null; }
+  const el = document.getElementById('rest-timer');
+  if (el) el.remove();
+}
 
 export function renderSession({ workoutId }) {
+  _sessionPBs.clear();
   const workout = Store.getWorkout(workoutId);
   if (!workout) { navigate('/'); return; }
 
@@ -41,6 +100,10 @@ function _buildSession(workout) {
     completed: false,
     exercises: workout.exercises.map(ei => {
       const prevExLog = lastLog?.exercises.find(e => e.exercise_instance_id === ei.id);
+      const prevSets = prevExLog?.sets.filter(s => s.completed) || [];
+      const ex = EXERCISES_MAP[ei.exercise_id];
+      const nextWeight = getNextWeight(prevSets, ei.rep_range, ex?.primary_muscle);
+
       return {
         exercise_instance_id: ei.id,
         exercise_id: ei.exercise_id,
@@ -49,7 +112,7 @@ function _buildSession(workout) {
           const prev = prevExLog?.sets[i];
           return {
             set_number: i + 1,
-            weight: prev?.weight ?? 0,
+            weight: nextWeight ?? prev?.weight ?? 0,
             reps: prev?.reps ?? ei.rep_range[0],
             completed: false,
           };
@@ -96,6 +159,7 @@ function _renderSessionUI(workout, session) {
   document.getElementById('session-back-btn').addEventListener('click', () => {
     if (confirm('Leave this session? Progress is saved and you can resume later.')) {
       clearInterval(_timerInterval);
+      _clearRestTimer();
       navigate('/');
     }
   });
@@ -104,8 +168,8 @@ function _renderSessionUI(workout, session) {
   document.getElementById('finish-btn').addEventListener('click', () => {
     const completed = Store.completeSession();
     clearInterval(_timerInterval);
-    toast('Workout complete! Great work.', 'success', 4000);
-    navigate('/');
+    _clearRestTimer();
+    showSummary(completed, workout);
   });
 
   _bindSessionEvents(workout, session);
@@ -121,6 +185,8 @@ function _exerciseBlock(exLog, workout, exIdx) {
 
   const lastLog = Store.getLastExerciseLog(effectiveExId);
   const prevSets = lastLog?.sets.filter(s => s.completed) || [];
+  const bestLift = Store.getBestLift(effectiveExId);
+  const nextWeight = getNextWeight(prevSets, ei.rep_range, ex.primary_muscle);
   const repRange = ei.rep_range;
 
   const allDone = exLog.sets.every(s => s.completed);
@@ -144,12 +210,11 @@ function _exerciseBlock(exLog, workout, exIdx) {
         </div>
       </div>
 
-      ${prevSets.length ? `
-        <div class="ex-block__prev">
-          <span class="ex-block__prev-label">Last session:</span>
-          ${prevSets.map(s => `<span class="prev-set">${fmtWeight(s.weight)}kg×${s.reps}</span>`).join('')}
-        </div>
-      ` : ''}
+      <div class="ex-block__stats" id="ex-stats-${exIdx}">
+        ${bestLift ? `<span class="ex-stat ex-stat--pb">🏆 Best: ${fmtWeight(bestLift.weight)}kg × ${bestLift.reps}</span>` : ''}
+        ${prevSets.length ? `<span class="ex-stat ex-stat--prev">Last: ${prevSets.map(s => `${fmtWeight(s.weight)}kg×${s.reps}`).join(', ')}</span>` : ''}
+        <span class="ex-stat ex-stat--next">${nextWeight !== null ? `→ Next: ${fmtWeight(nextWeight)}kg` : 'Start comfortable'}</span>
+      </div>
 
       <div class="ex-block__sets" id="sets-${exIdx}">
         <div class="sets-header">
@@ -307,7 +372,8 @@ function _bindSessionEvents(workout, session) {
 }
 
 function _toggleSet(workout, session, exIdx, sIdx) {
-  const set = session.exercises[exIdx].sets[sIdx];
+  const exLog = session.exercises[exIdx];
+  const set = exLog.sets[sIdx];
   set.completed = !set.completed;
   Store.updateSession(session);
 
@@ -326,8 +392,26 @@ function _toggleSet(workout, session, exIdx, sIdx) {
   _refreshExBlock(workout, session, exIdx);
 
   if (set.completed) {
-    // Vibrate for haptic feedback on mobile
     if (navigator.vibrate) navigator.vibrate(30);
+
+    // PB detection
+    const effectiveExId = exLog.substituted_exercise_id || exLog.exercise_id;
+    if (!_sessionPBs.has(effectiveExId)) {
+      const best = Store.getBestLift(effectiveExId);
+      const isPB = !best || set.weight > best.weight ||
+        (set.weight === best.weight && set.reps > best.reps);
+      if (isPB && set.weight > 0) {
+        _sessionPBs.add(effectiveExId);
+        toast(`New PB! 🎉 ${fmtWeight(set.weight)}kg × ${set.reps}`, 'success', 4000);
+        _updateStatsBar(effectiveExId, exIdx, set);
+      }
+    }
+
+    // Rest timer
+    const ex = EXERCISES_MAP[effectiveExId];
+    _startRestTimer(_getRestDuration(ex));
+  } else {
+    _clearRestTimer();
   }
 }
 
@@ -374,6 +458,19 @@ function _refreshExBlock(workout, session, exIdx) {
   if (!block) return;
   const allDone = exLog.sets.every(s => s.completed);
   block.classList.toggle('ex-block--done', allDone);
+
+  // Update stats bar (best + last session + next weight)
+  const statsBar = document.getElementById(`ex-stats-${exIdx}`);
+  if (statsBar) {
+    const bestLift = Store.getBestLift(effectiveExId);
+    const lastLog = Store.getLastExerciseLog(effectiveExId);
+    const prevSets = lastLog?.sets.filter(s => s.completed) || [];
+    const nextWeight = getNextWeight(prevSets, ei.rep_range, ex.primary_muscle);
+    statsBar.innerHTML =
+      (bestLift ? `<span class="ex-stat ex-stat--pb">🏆 Best: ${fmtWeight(bestLift.weight)}kg × ${bestLift.reps}</span>` : '') +
+      (prevSets.length ? `<span class="ex-stat ex-stat--prev">Last: ${prevSets.map(s => `${fmtWeight(s.weight)}kg×${s.reps}`).join(', ')}</span>` : '') +
+      `<span class="ex-stat ex-stat--next">${nextWeight !== null ? `→ Next: ${fmtWeight(nextWeight)}kg` : 'Start comfortable'}</span>`;
+  }
 
   // Update sets
   const setsContainer = document.getElementById(`sets-${exIdx}`);
@@ -481,6 +578,21 @@ function _openSubstitutionModal(workout, session, exIdx) {
       }
     });
   });
+}
+
+function _updateStatsBar(exerciseId, exIdx, newBest) {
+  const statsBar = document.getElementById(`ex-stats-${exIdx}`);
+  if (!statsBar) return;
+  const pbEl = statsBar.querySelector('.ex-stat--pb');
+  const pbText = `🏆 Best: ${fmtWeight(newBest.weight)}kg × ${newBest.reps}`;
+  if (pbEl) {
+    pbEl.textContent = pbText;
+  } else {
+    const span = document.createElement('span');
+    span.className = 'ex-stat ex-stat--pb';
+    span.textContent = pbText;
+    statsBar.prepend(span);
+  }
 }
 
 function _fmtElapsed(seconds) {

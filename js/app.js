@@ -10,17 +10,21 @@ import { renderDashboard } from './views/dashboard.js';
 import { renderWorkouts, renderWorkoutBuilder, renderWorkoutDetail } from './views/workouts.js';
 import { renderSession } from './views/session.js';
 import { renderExercises, renderExerciseDetail } from './views/exercises.js';
+import { renderPlan } from './views/plan.js';
+import { renderSummary } from './views/summary.js';
 
 // ─── Routes ────────────────────────────────────────────────────────────────
 
 onRoute('/', () => renderDashboard());
 onRoute('/workouts', () => renderWorkouts());
 onRoute('/workouts/new', () => renderWorkoutBuilder());
-onRoute('/workouts/:id', ({ id }) => renderWorkoutDetail({ id }));
 onRoute('/workouts/:id/edit', ({ id }) => renderWorkoutBuilder({ id }));
+onRoute('/workouts/:id/plan', ({ id }) => renderPlan({ id }));
+onRoute('/workouts/:id', ({ id }) => renderWorkoutDetail({ id }));
 onRoute('/session/:workoutId', ({ workoutId }) => renderSession({ workoutId }));
 onRoute('/exercises', () => renderExercises());
 onRoute('/exercises/:id', ({ id }) => renderExerciseDetail({ id }));
+onRoute('/summary', () => renderSummary());
 
 // ─── Nav ───────────────────────────────────────────────────────────────────
 

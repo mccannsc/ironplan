@@ -2,7 +2,7 @@ import { Store } from '../store.js';
 import { navigate, back } from '../router.js';
 import {
   EXERCISES, EXERCISES_MAP, MUSCLE_LABELS, EQUIPMENT_LABELS, PATTERN_LABELS,
-} from '../data/exercises.js';
+} from '../data/exercises.js?v=5';
 import { esc, equipmentIcon, debounce } from '../utils.js';
 
 // ─── Exercise Browser ──────────────────────────────────────────────────────
@@ -43,6 +43,13 @@ export function renderExercises() {
         ).join('')}
       </div>
 
+      <div class="filter-row" id="pattern-filters">
+        <button class="filter-chip filter-chip--active" data-pattern="">All</button>
+        ${Object.entries(PATTERN_LABELS).map(([p, label]) =>
+          `<button class="filter-chip" data-pattern="${p}">${label}</button>`
+        ).join('')}
+      </div>
+
       <div class="exercise-list" id="exercise-list">
         ${_renderExerciseItems(EXERCISES)}
       </div>
@@ -53,6 +60,7 @@ export function renderExercises() {
 
   let selectedMuscle = '';
   let selectedEquip = '';
+  let selectedPattern = '';
   let searchQuery = '';
 
   const listEl = document.getElementById('exercise-list');
@@ -63,6 +71,7 @@ export function renderExercises() {
       e.primary_muscle === selectedMuscle || e.secondary_muscles.includes(selectedMuscle)
     );
     if (selectedEquip) list = list.filter(e => e.equipment === selectedEquip);
+    if (selectedPattern) list = list.filter(e => e.pattern === selectedPattern);
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
       list = list.filter(e =>
@@ -91,6 +100,15 @@ export function renderExercises() {
     document.querySelectorAll('#equipment-filters .filter-chip').forEach(b => b.classList.remove('filter-chip--active'));
     btn.classList.add('filter-chip--active');
     selectedEquip = btn.dataset.equip;
+    refresh();
+  });
+
+  document.getElementById('pattern-filters').addEventListener('click', e => {
+    const btn = e.target.closest('[data-pattern]');
+    if (!btn) return;
+    document.querySelectorAll('#pattern-filters .filter-chip').forEach(b => b.classList.remove('filter-chip--active'));
+    btn.classList.add('filter-chip--active');
+    selectedPattern = btn.dataset.pattern;
     refresh();
   });
 
@@ -139,6 +157,8 @@ export function renderExerciseDetail({ id }) {
   if (!exercise) { navigate('/exercises'); return; }
 
   const lastLog = Store.getLastExerciseLog(id);
+  const bestLift = Store.getBestLift(id);
+  const existingNote = Store.getNote(id);
 
   const view = document.getElementById('view');
   view.innerHTML = `
@@ -186,6 +206,15 @@ export function renderExerciseDetail({ id }) {
           </div>
         ` : ''}
 
+        ${bestLift ? `
+          <div class="ex-detail__section">
+            <div class="pb-card">
+              <span class="pb-card__label">Personal Best</span>
+              <span class="pb-card__value">${bestLift.weight}kg × ${bestLift.reps} reps</span>
+            </div>
+          </div>
+        ` : ''}
+
         ${lastLog ? `
           <div class="ex-detail__section">
             <h3 class="ex-detail__section-title">Last logged</h3>
@@ -199,6 +228,18 @@ export function renderExerciseDetail({ id }) {
             </div>
           </div>
         ` : ''}
+
+        <div class="ex-detail__section">
+          <h3 class="ex-detail__section-title">My Notes</h3>
+          <textarea
+            class="ex-note-input"
+            id="ex-note-input"
+            placeholder="Add a cue, tip, or reminder for yourself…"
+            rows="3"
+          >${esc(existingNote)}</textarea>
+          <button class="btn btn--ghost btn--sm" id="save-note-btn">Save Note</button>
+          <span class="note-saved-indicator" id="note-saved-label"></span>
+        </div>
       </div>
 
       <div class="bottom-spacer"></div>
@@ -206,4 +247,11 @@ export function renderExerciseDetail({ id }) {
   `;
 
   document.getElementById('back-btn')?.addEventListener('click', () => back());
+
+  document.getElementById('save-note-btn')?.addEventListener('click', async () => {
+    const note = document.getElementById('ex-note-input').value.trim();
+    await Store.saveNote(id, note);
+    const label = document.getElementById('note-saved-label');
+    if (label) { label.textContent = 'Saved ✓'; setTimeout(() => { label.textContent = ''; }, 2000); }
+  });
 }

@@ -3,7 +3,7 @@ import { navigate, back } from '../router.js';
 import { uid, esc, timeAgo, debounce, equipmentIcon } from '../utils.js';
 import {
   EXERCISES, EXERCISES_MAP, MUSCLE_LABELS, EQUIPMENT_LABELS, PATTERN_LABELS,
-} from '../data/exercises.js';
+} from '../data/exercises.js?v=5';
 import { toast } from '../components/toast.js';
 import { openModal, closeModal } from '../components/modal.js';
 

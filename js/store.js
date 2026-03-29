@@ -19,6 +19,8 @@ const DEFAULT_STATE = {
 let _state = { ...DEFAULT_STATE, activeSession: _loadSession() };
 let _userId = null;
 const _listeners = new Set();
+let _notes = {};          // exerciseId → note string
+let _bodyweightLogs = []; // [{ id, date, weight }]
 
 // ─── Session (localStorage only) ────────────────────────────────────────────
 
@@ -99,13 +101,24 @@ export const Store = {
   async init(userId) {
     _userId = userId;
 
-    const [{ data: workouts, error: we }, { data: logs, error: le }] = await Promise.all([
+    const [
+      { data: workouts, error: we },
+      { data: logs, error: le },
+      { data: notes },
+      { data: bwLogs },
+    ] = await Promise.all([
       supabase.from('workouts').select('*').eq('user_id', userId).order('created_at'),
       supabase.from('workout_logs').select('*').eq('user_id', userId).order('date', { ascending: false }),
+      supabase.from('exercise_notes').select('*').eq('user_id', userId),
+      supabase.from('bodyweight_logs').select('*').eq('user_id', userId).order('date', { ascending: false }),
     ]);
 
     if (we) console.error('Workouts fetch error:', we);
     if (le) console.error('Logs fetch error:', le);
+
+    _notes = {};
+    (notes ?? []).forEach(n => { _notes[n.exercise_id] = n.note; });
+    _bodyweightLogs = bwLogs ?? [];
 
     _set({
       workouts: workouts ?? [],
@@ -217,6 +230,173 @@ export const Store = {
       }
     }
     return best;
+  },
+
+  /** Get the all-time best completed set for an exercise: highest weight, then most reps */
+  getBestLift(exerciseId) {
+    let best = null;
+    for (const log of _state.workoutLogs) {
+      if (!log.completed) continue;
+      const exLog = log.exercises.find(e =>
+        e.exercise_id === exerciseId || e.substituted_exercise_id === exerciseId
+      );
+      if (!exLog) continue;
+      for (const s of exLog.sets) {
+        if (!s.completed) continue;
+        if (
+          !best ||
+          s.weight > best.weight ||
+          (s.weight === best.weight && s.reps > best.reps)
+        ) {
+          best = { weight: s.weight, reps: s.reps };
+        }
+      }
+    }
+    return best;
+  },
+
+  // ── Progress Flags ────────────────────────────────────────────────────────
+
+  /** Compare last 3 sessions for an exercise. Returns 'green'|'amber'|'red'|null */
+  getProgressFlag(exerciseId) {
+    const relevant = _state.workoutLogs
+      .filter(l => l.completed && l.exercises.some(e =>
+        e.exercise_id === exerciseId || e.substituted_exercise_id === exerciseId
+      ))
+      .sort((a, b) => new Date(b.date) - new Date(a.date))
+      .slice(0, 3);
+
+    if (relevant.length < 2) return null;
+
+    const bests = relevant.map(session => {
+      const ex = session.exercises.find(e =>
+        e.exercise_id === exerciseId || e.substituted_exercise_id === exerciseId
+      );
+      const completed = ex?.sets.filter(s => s.completed) || [];
+      if (!completed.length) return null;
+      const maxW = Math.max(...completed.map(s => s.weight));
+      const maxR = Math.max(...completed.filter(s => s.weight === maxW).map(s => s.reps));
+      return { weight: maxW, reps: maxR };
+    }).filter(Boolean);
+
+    if (bests.length < 2) return null;
+    const [a, b] = bests;
+    if (a.weight > b.weight || (a.weight === b.weight && a.reps > b.reps)) return 'green';
+    if (a.weight < b.weight || (a.weight === b.weight && a.reps < b.reps)) return 'red';
+    return 'amber';
+  },
+
+  /** Return a plateau suggestion string, or null if no plateau */
+  getPlateauSuggestion(exerciseId) {
+    const flag = Store.getProgressFlag(exerciseId);
+    if (!flag || flag === 'green') return null;
+
+    // Check for 4+ stalled sessions
+    const relevant = _state.workoutLogs
+      .filter(l => l.completed && l.exercises.some(e =>
+        e.exercise_id === exerciseId || e.substituted_exercise_id === exerciseId
+      ))
+      .sort((a, b) => new Date(b.date) - new Date(a.date))
+      .slice(0, 5);
+
+    if (relevant.length >= 4) {
+      const bests = relevant.map(session => {
+        const ex = session.exercises.find(e =>
+          e.exercise_id === exerciseId || e.substituted_exercise_id === exerciseId
+        );
+        const completed = ex?.sets.filter(s => s.completed) || [];
+        if (!completed.length) return null;
+        const maxW = Math.max(...completed.map(s => s.weight));
+        const maxR = Math.max(...completed.filter(s => s.weight === maxW).map(s => s.reps));
+        return { weight: maxW, reps: maxR };
+      }).filter(Boolean);
+
+      if (bests.length >= 4) {
+        const newest = bests[0];
+        const oldest = bests[bests.length - 1];
+        if (newest.weight <= oldest.weight && newest.reps <= oldest.reps) {
+          return 'No progress in 4+ sessions — consider swapping this exercise.';
+        }
+      }
+    }
+
+    if (flag === 'red') return 'Weight dropped — reduce 5–10% and rebuild.';
+    return 'Stalled — aim for one more rep before adding weight.';
+  },
+
+  // ── Exercise Notes ────────────────────────────────────────────────────────
+
+  getNote(exerciseId) {
+    return _notes[exerciseId] || '';
+  },
+
+  async saveNote(exerciseId, note) {
+    _notes[exerciseId] = note;
+    if (!_userId) return;
+    const { error } = await supabase.from('exercise_notes').upsert(
+      { user_id: _userId, exercise_id: exerciseId, note, updated_at: new Date().toISOString() },
+      { onConflict: 'user_id,exercise_id' }
+    );
+    if (error) console.error('Note save error:', error);
+  },
+
+  // ── Weekly Stats & Bodyweight ─────────────────────────────────────────────
+
+  getWeeklyStats() {
+    const now = new Date();
+    const day = now.getDay(); // 0=Sun
+    const weekStart = new Date(now);
+    weekStart.setDate(now.getDate() - (day === 0 ? 6 : day - 1));
+    weekStart.setHours(0, 0, 0, 0);
+    const prevWeekStart = new Date(weekStart);
+    prevWeekStart.setDate(weekStart.getDate() - 7);
+
+    function toDate(str) { return new Date(str + 'T00:00:00'); }
+
+    const thisWeekLogs = _state.workoutLogs.filter(l =>
+      l.completed && toDate(l.date) >= weekStart
+    );
+    const prevWeekLogs = _state.workoutLogs.filter(l =>
+      l.completed && toDate(l.date) >= prevWeekStart && toDate(l.date) < weekStart
+    );
+
+    function calcVolume(logs) {
+      return Math.round(logs.reduce((total, log) =>
+        total + log.exercises.reduce((et, ex) =>
+          et + ex.sets.filter(s => s.completed).reduce((st, s) => st + s.weight * s.reps, 0)
+        , 0)
+      , 0));
+    }
+
+    function countSets(logs) {
+      return logs.reduce((n, l) =>
+        n + l.exercises.reduce((et, ex) => et + ex.sets.filter(s => s.completed).length, 0)
+      , 0);
+    }
+
+    return {
+      thisWeek: {
+        workouts: thisWeekLogs.length,
+        volume: calcVolume(thisWeekLogs),
+        sets: countSets(thisWeekLogs),
+      },
+      prevWeek: {
+        workouts: prevWeekLogs.length,
+        volume: calcVolume(prevWeekLogs),
+      },
+      latestBodyweight: _bodyweightLogs[0] || null,
+    };
+  },
+
+  async addBodyweight(weight) {
+    const date = new Date().toISOString().slice(0, 10);
+    _bodyweightLogs = [{ date, weight }, ..._bodyweightLogs.filter(b => b.date !== date)];
+    if (!_userId) return;
+    const { error } = await supabase.from('bodyweight_logs').upsert(
+      { user_id: _userId, date, weight },
+      { onConflict: 'user_id,date' }
+    );
+    if (error) console.error('Bodyweight save error:', error);
   },
 
   // ── Dev helpers ───────────────────────────────────────────────────────────
