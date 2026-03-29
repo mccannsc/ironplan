@@ -1,7 +1,7 @@
 import { Store } from '../store.js';
 import { navigate } from '../router.js';
 import { esc, fmtWeight, fmtDuration, fmtDate } from '../utils.js';
-import { EXERCISES_MAP, MUSCLE_LABELS } from '../data/exercises.js?v=5';
+import { EXERCISES_MAP, MUSCLE_LABELS } from '../data/exercises.js?v=6';
 
 // Module-level storage for the just-completed session
 let _session = null;

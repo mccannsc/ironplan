@@ -1,7 +1,7 @@
 import { Store } from '../store.js';
 import { navigate } from '../router.js';
 import { fmtDate, timeAgo, fmtDuration, today, esc } from '../utils.js';
-import { EXERCISES_MAP, MUSCLE_LABELS } from '../data/exercises.js?v=5';
+import { EXERCISES_MAP, MUSCLE_LABELS } from '../data/exercises.js?v=6';
 import { logout } from '../app.js';
 
 export function renderDashboard() {
@@ -147,6 +147,7 @@ function _nextWorkoutCard(workout) {
         <h2 class="section__title">Next Workout</h2>
         <button class="btn btn--ghost btn--xs" id="next-workout-plan">Plan →</button>
       </div>
+      <div class="section__sub">Based on your last completed workout</div>
       <div class="next-workout-card">
         <div class="next-workout-card__info">
           <div class="next-workout-card__name">${esc(workout.name)}</div>
@@ -162,7 +163,7 @@ function _nextWorkoutCard(workout) {
 }
 
 function _weekSection(stats) {
-  const { thisWeek, prevWeek, latestBodyweight } = stats;
+  const { thisWeek, prevWeek, latestBodyweight, lastWorkoutDurationMins } = stats;
   const volumeDelta = prevWeek.volume > 0
     ? Math.round(((thisWeek.volume - prevWeek.volume) / prevWeek.volume) * 100)
     : null;
@@ -189,6 +190,18 @@ function _weekSection(stats) {
           <div class="week-stat__label">Volume kg</div>
           ${volumeDelta !== null ? `<div class="week-stat__delta week-stat__delta--${volColor}">${volSign}${volumeDelta}%</div>` : ''}
         </div>
+        ${thisWeek.avgDurationMins !== null ? `
+        <div class="week-stat">
+          <div class="week-stat__value">${thisWeek.avgDurationMins}m</div>
+          <div class="week-stat__label">Avg Duration</div>
+          ${lastWorkoutDurationMins !== null ? `<div class="week-stat__delta">last ${lastWorkoutDurationMins}m</div>` : ''}
+        </div>
+        ` : (lastWorkoutDurationMins !== null ? `
+        <div class="week-stat">
+          <div class="week-stat__value">${lastWorkoutDurationMins}m</div>
+          <div class="week-stat__label">Last Duration</div>
+        </div>
+        ` : '')}
       </div>
       <div class="bw-row">
         <div class="bw-row__current">

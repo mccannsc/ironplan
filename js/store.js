@@ -298,6 +298,23 @@ export const Store = {
       .sort((a, b) => new Date(b.date) - new Date(a.date));
   },
 
+  /** Get last N exercise logs for an exercise, most recent first */
+  getLastNExerciseLogs(exerciseId, n = 3) {
+    return _state.workoutLogs
+      .filter(l => l.completed && l.exercises.some(e =>
+        e.exercise_id === exerciseId || e.substituted_exercise_id === exerciseId
+      ))
+      .sort((a, b) => new Date(b.date) - new Date(a.date))
+      .slice(0, n)
+      .map(log => {
+        const ex = log.exercises.find(e =>
+          e.exercise_id === exerciseId || e.substituted_exercise_id === exerciseId
+        );
+        return ex ? { ...ex, date: log.date } : null;
+      })
+      .filter(Boolean);
+  },
+
   getLastExerciseLog(exerciseId) {
     let best = null;
     for (const log of _state.workoutLogs) {
@@ -454,17 +471,34 @@ export const Store = {
       , 0);
     }
 
+    function calcAvgDurationMins(logs) {
+      const withDur = logs.filter(l => l.started_at && l.completed_at);
+      if (!withDur.length) return null;
+      const total = withDur.reduce((sum, l) =>
+        sum + Math.floor((new Date(l.completed_at) - new Date(l.started_at)) / 60000)
+      , 0);
+      return Math.round(total / withDur.length);
+    }
+
+    const lastCompleted = [..._state.workoutLogs]
+      .filter(l => l.completed && l.started_at && l.completed_at)
+      .sort((a, b) => new Date(b.date) - new Date(a.date))[0] || null;
+
     return {
       thisWeek: {
         workouts: thisWeekLogs.length,
         volume: calcVolume(thisWeekLogs),
         sets: countSets(thisWeekLogs),
+        avgDurationMins: calcAvgDurationMins(thisWeekLogs),
       },
       prevWeek: {
         workouts: prevWeekLogs.length,
         volume: calcVolume(prevWeekLogs),
       },
       latestBodyweight: _bodyweightLogs[0] || null,
+      lastWorkoutDurationMins: lastCompleted
+        ? Math.floor((new Date(lastCompleted.completed_at) - new Date(lastCompleted.started_at)) / 60000)
+        : null,
     };
   },
 

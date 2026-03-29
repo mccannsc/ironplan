@@ -1758,3 +1758,69 @@ input[type=number] { -moz-appearance: textfield; }
   padding: 4px 8px;
   font-size: 12px;
 }
+
+/* ─── Section subtitle ───────────────────────────────────────────────────── */
+.section__sub {
+  font-size: 11px;
+  color: var(--text-3);
+  margin-top: -4px;
+  margin-bottom: 8px;
+}
+
+/* ─── Effort buttons ─────────────────────────────────────────────────────── */
+.ex-block__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px 4px;
+  gap: 8px;
+}
+
+.effort-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+}
+
+.effort-row__label {
+  font-size: 11px;
+  color: var(--text-3);
+  margin-right: 2px;
+}
+
+.effort-btn {
+  padding: 4px 10px;
+  border-radius: var(--r-full);
+  border: 1px solid var(--border-2);
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.effort-btn--active { border-color: transparent; color: #000; font-weight: 600; }
+.effort-btn--active.effort-btn--easy   { background: var(--green); }
+.effort-btn--active.effort-btn--normal { background: var(--yellow); }
+.effort-btn--active.effort-btn--hard   { background: var(--red); }
+
+/* ─── Repeat-set button ──────────────────────────────────────────────────── */
+.repeat-btn {
+  background: none;
+  border: none;
+  color: var(--text-3);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+}
+.repeat-btn:active { color: var(--accent); }
+
+/* ─── Plan progression advice ────────────────────────────────────────────── */
+.plan-ex__advice {
+  font-size: 12px;
+  color: var(--accent-text);
+  padding: 4px 0 0;
+  margin-top: 4px;
+}

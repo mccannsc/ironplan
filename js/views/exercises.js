@@ -2,7 +2,7 @@ import { Store } from '../store.js';
 import { navigate, back } from '../router.js';
 import {
   EXERCISES, EXERCISES_MAP, MUSCLE_LABELS, EQUIPMENT_LABELS, PATTERN_LABELS,
-} from '../data/exercises.js?v=5';
+} from '../data/exercises.js?v=6';
 import { esc, equipmentIcon, debounce } from '../utils.js';
 
 // ─── Exercise Browser ──────────────────────────────────────────────────────

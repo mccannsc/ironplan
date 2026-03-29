@@ -1,7 +1,7 @@
 import { Store } from '../store.js';
 import { navigate, back } from '../router.js';
 import { esc, fmtWeight } from '../utils.js';
-import { EXERCISES_MAP, MUSCLE_LABELS, getNextWeight } from '../data/exercises.js?v=5';
+import { EXERCISES_MAP, MUSCLE_LABELS, getProgressionAdvice } from '../data/exercises.js?v=6';
 
 export function renderPlan({ id }) {
   const workout = Store.getWorkout(id);
@@ -34,10 +34,12 @@ function _planRow(ei, idx) {
   const ex = EXERCISES_MAP[ei.exercise_id];
   if (!ex) return '';
 
-  const lastLog = Store.getLastExerciseLog(ei.exercise_id);
+  const sessionLogs = Store.getLastNExerciseLogs(ei.exercise_id, 3);
+  const lastLog = sessionLogs[0] || null;
   const prevSets = lastLog?.sets.filter(s => s.completed) || [];
   const bestLift = Store.getBestLift(ei.exercise_id);
-  const nextWeight = getNextWeight(prevSets, ei.rep_range, ex.primary_muscle);
+  const lastEffort = lastLog?.effort || null;
+  const advice = getProgressionAdvice(sessionLogs, ei.rep_range, ex.primary_muscle, lastEffort);
   const flag = Store.getProgressFlag(ei.exercise_id);
   const plateau = Store.getPlateauSuggestion(ei.exercise_id);
   const note = Store.getNote(ei.exercise_id);
@@ -60,10 +62,10 @@ function _planRow(ei, idx) {
       </div>
 
       <div class="plan-ex__stats">
-        ${nextWeight !== null ? `
+        ${advice.weight !== null ? `
           <div class="plan-stat plan-stat--next">
             <div class="plan-stat__label">Target</div>
-            <div class="plan-stat__value">${fmtWeight(nextWeight)}kg</div>
+            <div class="plan-stat__value">${fmtWeight(advice.weight)}kg</div>
           </div>
         ` : ''}
         ${bestLift ? `
@@ -84,6 +86,7 @@ function _planRow(ei, idx) {
         `}
       </div>
 
+      ${advice.message ? `<div class="plan-ex__advice">${esc(advice.message)}</div>` : ''}
       ${plateau ? `<div class="plan-ex__plateau"><span class="plan-ex__plateau-icon">⚠</span> ${esc(plateau)}</div>` : ''}
       ${note ? `<div class="plan-ex__note">"${esc(note)}"</div>` : ''}
     </div>

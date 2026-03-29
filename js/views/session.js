@@ -10,7 +10,7 @@ import {
 } from '../utils.js';
 import {
   EXERCISES_MAP, MUSCLE_LABELS, EQUIPMENT_LABELS, getSubstitutions, checkOverload, suggestWeight, getNextWeight,
-} from '../data/exercises.js?v=5';
+} from '../data/exercises.js?v=6';
 import { toast } from '../components/toast.js';
 import { openModal, closeModal } from '../components/modal.js';
 import { showSummary } from './summary.js';
@@ -108,6 +108,7 @@ function _buildSession(workout) {
         exercise_instance_id: ei.id,
         exercise_id: ei.exercise_id,
         substituted_exercise_id: null,
+        effort: null,
         sets: Array.from({ length: ei.sets }, (_, i) => {
           const prev = prevExLog?.sets[i];
           return {
@@ -223,7 +224,7 @@ function _exerciseBlock(exLog, workout, exIdx) {
           <span class="sets-col sets-col--reps">Reps</span>
           <span class="sets-col sets-col--check"></span>
         </div>
-        ${exLog.sets.map((s, sIdx) => _setRow(s, sIdx, exIdx, prevSets[sIdx])).join('')}
+        ${exLog.sets.map((s, sIdx) => _setRow(s, sIdx, exIdx, prevSets[sIdx], sIdx > 0)).join('')}
       </div>
 
       ${overload ? `
@@ -237,18 +238,25 @@ function _exerciseBlock(exLog, workout, exIdx) {
         </div>
       ` : ''}
 
-      <div class="ex-block__add-set">
+      <div class="ex-block__footer">
+        <div class="effort-row" id="effort-row-${exIdx}">
+          <span class="effort-row__label">Effort:</span>
+          ${['easy', 'normal', 'hard'].map(e => `
+            <button class="effort-btn ${exLog.effort === e ? `effort-btn--active effort-btn--${e}` : ''}"
+              data-effort-btn data-ex="${exIdx}" data-effort="${e}">${e.charAt(0).toUpperCase() + e.slice(1)}</button>
+          `).join('')}
+        </div>
         <button class="btn btn--ghost btn--xs add-set-btn" data-add-set-idx="${exIdx}">+ Add Set</button>
       </div>
     </div>
   `;
 }
 
-function _setRow(s, sIdx, exIdx, prevSet) {
+function _setRow(s, sIdx, exIdx, prevSet, showRepeat = false) {
   const done = s.completed;
   return `
     <div class="set-row ${done ? 'set-row--done' : ''}" id="set-row-${exIdx}-${sIdx}">
-      <span class="sets-col sets-col--num set-num">${sIdx + 1}</span>
+      <span class="sets-col sets-col--num set-num">${showRepeat && !done ? `<button class="repeat-btn" data-repeat-set data-ex="${exIdx}" data-set="${sIdx}" title="Repeat last set" aria-label="Repeat last set">↻</button>` : sIdx + 1}</span>
       <div class="sets-col sets-col--weight">
         <div class="stepper">
           <button class="stepper__btn stepper__btn--dec" data-stepper-dec data-ex="${exIdx}" data-set="${sIdx}" data-field="weight">−</button>
@@ -294,6 +302,15 @@ function _setRow(s, sIdx, exIdx, prevSet) {
       </div>
     </div>
   `;
+}
+
+function _refreshEffortRow(exIdx, currentEffort) {
+  const row = document.getElementById(`effort-row-${exIdx}`);
+  if (!row) return;
+  row.querySelectorAll('[data-effort-btn]').forEach(btn => {
+    const e = btn.dataset.effort;
+    btn.className = `effort-btn${currentEffort === e ? ` effort-btn--active effort-btn--${e}` : ''}`;
+  });
 }
 
 function _bindSessionEvents(workout, session) {
@@ -344,6 +361,38 @@ function _bindSessionEvents(workout, session) {
     if (addSetBtn) {
       const exIdx = parseInt(addSetBtn.dataset.addSetIdx);
       _addSet(workout, session, exIdx);
+      return;
+    }
+
+    // Effort button
+    const effortBtn = e.target.closest('[data-effort-btn]');
+    if (effortBtn) {
+      const exIdx = parseInt(effortBtn.dataset.ex);
+      const effort = effortBtn.dataset.effort;
+      const exLog = session.exercises[exIdx];
+      exLog.effort = exLog.effort === effort ? null : effort;
+      Store.updateSession(session);
+      _refreshEffortRow(exIdx, exLog.effort);
+      return;
+    }
+
+    // Repeat last set
+    const repeatBtn = e.target.closest('[data-repeat-set]');
+    if (repeatBtn) {
+      const exIdx = parseInt(repeatBtn.dataset.ex);
+      const sIdx = parseInt(repeatBtn.dataset.set);
+      const exLog = session.exercises[exIdx];
+      // Find last completed set before this one
+      const lastDone = [...exLog.sets].slice(0, sIdx).reverse().find(s => s.completed);
+      if (lastDone) {
+        exLog.sets[sIdx].weight = lastDone.weight;
+        exLog.sets[sIdx].reps = lastDone.reps;
+        Store.updateSession(session);
+        const weightInput = document.querySelector(`[data-weight-input][data-ex="${exIdx}"][data-set="${sIdx}"]`);
+        const repsInput = document.querySelector(`[data-reps-input][data-ex="${exIdx}"][data-set="${sIdx}"]`);
+        if (weightInput) weightInput.value = lastDone.weight;
+        if (repsInput) repsInput.value = lastDone.reps;
+      }
       return;
     }
   });
@@ -410,6 +459,15 @@ function _toggleSet(workout, session, exIdx, sIdx) {
     // Rest timer
     const ex = EXERCISES_MAP[effectiveExId];
     _startRestTimer(_getRestDuration(ex));
+
+    // Auto-advance focus to next incomplete set weight input
+    const nextSIdx = exLog.sets.findIndex((s, i) => i > sIdx && !s.completed);
+    if (nextSIdx !== -1) {
+      setTimeout(() => {
+        const nextInput = document.querySelector(`[data-weight-input][data-ex="${exIdx}"][data-set="${nextSIdx}"]`);
+        if (nextInput) nextInput.focus();
+      }, 50);
+    }
   } else {
     _clearRestTimer();
   }
@@ -486,7 +544,7 @@ function _refreshExBlock(workout, session, exIdx) {
       </div>
     `;
     setsContainer.innerHTML = headerHTML +
-      exLog.sets.map((s, sIdx) => _setRow(s, sIdx, exIdx, prevSets[sIdx])).join('');
+      exLog.sets.map((s, sIdx) => _setRow(s, sIdx, exIdx, prevSets[sIdx], sIdx > 0)).join('');
   }
 
   // Update overload banner

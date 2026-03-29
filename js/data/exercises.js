@@ -667,6 +667,62 @@ export function getNextWeight(lastSets, repRange, primaryMuscle) {
   return maxWeight;
 }
 
+/**
+ * Adaptive progression advice based on the last 2–3 sessions.
+ *
+ * @param {Array}  sessionLogs   - Most-recent-first array of exercise logs {sets:[]}
+ * @param {Array}  repRange      - [repMin, repMax]
+ * @param {string} primaryMuscle
+ * @param {string|null} effort   - 'easy'|'normal'|'hard'|null from last session
+ * @returns {{ weight: number|null, message: string|null }}
+ */
+export function getProgressionAdvice(sessionLogs, repRange, primaryMuscle, effort = null) {
+  if (!sessionLogs || !sessionLogs.length) return { weight: null, message: null };
+  const [repMin, repMax] = repRange;
+
+  const perfs = sessionLogs.map(sl => {
+    const done = (sl.sets || []).filter(s => s.completed);
+    if (!done.length) return null;
+    const maxW = Math.max(...done.map(s => s.weight));
+    const maxR = Math.max(...done.filter(s => s.weight === maxW).map(s => s.reps));
+    return {
+      weight: maxW, reps: maxR,
+      allHitMax: done.every(s => s.reps >= repMax),
+      anyBelowMin: done.some(s => s.reps < repMin),
+    };
+  }).filter(Boolean);
+
+  if (!perfs.length) return { weight: null, message: null };
+
+  const latest = perfs[0];
+  const prev = perfs[1];
+
+  // Struggling 2 sessions in a row → hold, rebuild reps
+  if (perfs.length >= 2 && latest.anyBelowMin && prev && prev.anyBelowMin)
+    return { weight: latest.weight, message: 'Hold weight — rebuild reps first' };
+
+  // Felt hard and didn't hit max reps → hold
+  if (effort === 'hard' && !latest.allHitMax)
+    return { weight: latest.weight, message: 'Hold weight, add reps' };
+
+  // Two consecutive sessions hitting top of range → increase
+  if (perfs.length >= 2 && latest.allHitMax && prev && prev.allHitMax)
+    return { weight: suggestWeight(latest.weight, primaryMuscle), message: 'Ready to increase — two strong sessions' };
+
+  // One session hitting top of range → increase (influenced by effort)
+  if (latest.allHitMax)
+    return {
+      weight: suggestWeight(latest.weight, primaryMuscle),
+      message: effort === 'easy' ? 'Increase weight — felt easy' : 'Increase weight next session',
+    };
+
+  // Flat performance for 3 sessions → prompt to try more reps
+  if (perfs.length >= 3 && latest.weight <= perfs[2].weight && latest.reps <= perfs[2].reps)
+    return { weight: latest.weight, message: 'Hold weight — try to add reps' };
+
+  return { weight: latest.weight, message: null };
+}
+
 export const MUSCLE_GROUPS = [
   'chest', 'chest_upper', 'chest_lower',
   'lats', 'back_upper', 'back_lower',
