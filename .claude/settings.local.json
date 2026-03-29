@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx create-next-app@latest . --typescript --tailwind --app --no-src-dir --import-alias \"@/*\" --yes)",
+      "Bash(npm --version)",
+      "Bash(export PATH=\"/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:$PATH\")",
+      "Read(//opt/homebrew/bin/**)",
+      "Read(//usr/local/bin/**)",
+      "Read(//Users/simonmccann/.nvm/versions/**)",
+      "Bash(source ~/.zshrc)",
+      "Bash(source ~/.zprofile)",
+      "Bash(source ~/.profile)",
+      "Read(//opt/**)",
+      "Read(//usr/local/**)",
+      "Bash(chmod +x \"/Users/simonmccann/Desktop/Claude/Fitness app/start.sh\")",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(cp -r \"/Users/simonmccann/Desktop/Claude/Fitness app\" /tmp/ironplan)",
+      "Read(//tmp/**)",
+      "Bash(rsync -a --delete \"/Users/simonmccann/Desktop/Claude/Fitness app/\" /tmp/ironplan/ --exclude .claude --exclude start.sh)"
+    ]
+  }
+}

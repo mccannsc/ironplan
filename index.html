@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#090909" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="IronPlan" />
+  <meta name="description" content="Smart workout tracking with progressive overload" />
+
+  <title>IronPlan</title>
+
+  <link rel="manifest" href="manifest.json" />
+  <link rel="stylesheet" href="css/app.css" />
+
+
+</head>
+<body>
+
+  <div id="app">
+
+    <!-- ── Main content view ──────────────────────────── -->
+    <div id="view" role="main"></div>
+
+    <!-- ── Bottom navigation ─────────────────────────── -->
+    <nav class="bottom-nav" aria-label="Main navigation">
+
+      <button class="nav-item" data-nav="/" aria-label="Dashboard">
+        <span class="nav-item__icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+            <polyline points="9 22 9 12 15 12 15 22"/>
+          </svg>
+        </span>
+        <span class="nav-item__label">Home</span>
+      </button>
+
+      <button class="nav-item" data-nav="/workouts" aria-label="Workouts">
+        <span class="nav-item__icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M6 4v16M18 4v16M3 8h4M17 8h4M3 16h4M17 16h4"/>
+          </svg>
+        </span>
+        <span class="nav-item__label">Workouts</span>
+      </button>
+
+      <button class="nav-item" data-nav="/exercises" aria-label="Exercises">
+        <span class="nav-item__icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="8" y1="6" x2="21" y2="6"/>
+            <line x1="8" y1="12" x2="21" y2="12"/>
+            <line x1="8" y1="18" x2="21" y2="18"/>
+            <line x1="3" y1="6" x2="3.01" y2="6"/>
+            <line x1="3" y1="12" x2="3.01" y2="12"/>
+            <line x1="3" y1="18" x2="3.01" y2="18"/>
+          </svg>
+        </span>
+        <span class="nav-item__label">Exercises</span>
+      </button>
+
+      <!-- Active session quick-start: navigates to last selected or first workout -->
+      <button class="nav-item" id="log-nav-btn" data-nav="/" aria-label="Log workout">
+        <span class="nav-item__icon">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/>
+            <polygon points="10 8 16 12 10 16 10 8"/>
+          </svg>
+        </span>
+        <span class="nav-item__label">Log</span>
+      </button>
+
+    </nav>
+
+  </div>
+
+  <!-- ── Modal overlay ──────────────────────────────── -->
+  <div id="modal-overlay" class="modal-overlay" role="dialog" aria-modal="true"></div>
+
+  <!-- ── Toast container ────────────────────────────── -->
+  <div id="toast-container" aria-live="polite" aria-atomic="false"></div>
+
+  <!-- ── App ────────────────────────────────────────── -->
+  <script type="module" src="js/app.js?v=3"></script>
+
+  <!-- Log nav button: smart routing -->
+  <script type="module">
+    import { Store } from './js/store.js';
+    import { navigate } from './js/router.js';
+
+    document.getElementById('log-nav-btn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      const { activeSession, workouts } = Store.getState();
+      if (activeSession) {
+        navigate(`/session/${activeSession.workout_id}`);
+      } else if (workouts.length > 0) {
+        // Show quick-start picker if multiple workouts, else go straight to first
+        if (workouts.length === 1) {
+          navigate(`/session/${workouts[0].id}`);
+        } else {
+          navigate('/workouts');
+        }
+      } else {
+        navigate('/workouts/new');
+      }
+    });
+  </script>
+
+</body>
+</html>
