@@ -318,6 +318,16 @@ export const EXERCISES = [
     description: 'Adjust the roller to sit just above the ankle. Extend fully, hold briefly at the top, and control the descent. Use for quad isolation or as a pre/post exhaustion tool.',
   },
   {
+    id: 'walking-lunges',
+    name: 'Walking Lunges',
+    primary_muscle: 'quads',
+    secondary_muscles: ['glutes', 'hamstrings'],
+    equipment: 'dumbbell',
+    pattern: 'squat',
+    difficulty: 'beginner',
+    description: 'Step forward, lower the rear knee toward the floor, then bring the back foot forward into the next step. Keep torso upright. Dumbbells optional — start bodyweight to learn the pattern.',
+  },
+  {
     id: 'reverse-lunges',
     name: 'Reverse Lunges',
     primary_muscle: 'quads',

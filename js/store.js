@@ -7,8 +7,10 @@
 
 import { supabase } from './lib/supabase.js';
 import { debounce } from './utils.js';
+import { DEFAULT_WORKOUTS } from './data/defaults.js';
 
-const SESSION_KEY = 'ironplan_session_v1';
+const SESSION_KEY  = 'ironplan_session_v1';
+const SEQUENCE_KEY = 'ironplan_sequence_v1';
 
 const DEFAULT_STATE = {
   workouts: [],
@@ -21,6 +23,17 @@ let _userId = null;
 const _listeners = new Set();
 let _notes = {};          // exerciseId → note string
 let _bodyweightLogs = []; // [{ id, date, weight }]
+let _sequence = _loadSequence(); // ordered workout IDs for rotation
+
+function _loadSequence() {
+  try { return JSON.parse(localStorage.getItem(SEQUENCE_KEY)) || []; }
+  catch (_) { return []; }
+}
+
+function _saveSequence(ids) {
+  try { localStorage.setItem(SEQUENCE_KEY, JSON.stringify(ids)); }
+  catch (_) { /* ignore */ }
+}
 
 // ─── Session (localStorage only) ────────────────────────────────────────────
 
@@ -149,6 +162,10 @@ export const Store = {
   },
 
   deleteWorkout(id) {
+    // Remove from rotation sequence
+    _sequence = _sequence.filter(sid => sid !== id);
+    _saveSequence(_sequence);
+
     _set(s => ({
       workouts: s.workouts.filter(w => w.id !== id),
       workoutLogs: s.workoutLogs.filter(l => l.workout_id !== id),
@@ -164,6 +181,69 @@ export const Store = {
 
   getWorkout(id) {
     return _state.workouts.find(w => w.id === id) || null;
+  },
+
+  // ── Default Workouts + Sequence ───────────────────────────────────────────
+
+  /**
+   * Create the 4 default workouts if the user has none.
+   * Uses a single batch state update to avoid clobbering workoutLogs.
+   * Sets the rotation sequence in localStorage.
+   */
+  seedDefaultWorkouts() {
+    if (_state.workouts.length > 0) return;
+
+    const newWorkouts = DEFAULT_WORKOUTS.map((def, i) => {
+      const id = (Date.now() + i).toString(36) + Math.random().toString(36).slice(2, 7);
+      return {
+        id,
+        name: def.name,
+        order_position: def.order_position,
+        exercises: def.exercises.map((e, j) => ({
+          id: id + '_' + j,
+          exercise_id: e.exercise_id,
+          sets: e.sets,
+          rep_range: e.rep_range,
+          notes: '',
+          order: j,
+        })),
+        created_at: new Date().toISOString(),
+      };
+    });
+
+    // Single _set preserves workoutLogs, activeSession, etc.
+    _set(s => ({ ...s, workouts: [...s.workouts, ...newWorkouts] }));
+
+    _sequence = newWorkouts.map(w => w.id);
+    _saveSequence(_sequence);
+
+    // Sync all to Supabase in background
+    newWorkouts.forEach(w => _upsertWorkout(w));
+  },
+
+  /** Returns the next workout to do based on rotation sequence + last completed log */
+  getNextWorkout() {
+    // Filter sequence to workouts that still exist
+    const validSeq = _sequence.filter(id => _state.workouts.some(w => w.id === id));
+
+    // Fall back to first workout if no sequence set
+    if (validSeq.length === 0) {
+      return _state.workouts[0] || null;
+    }
+
+    // Find most recent completed log whose workout is in the sequence
+    const lastLog = [..._state.workoutLogs]
+      .filter(l => l.completed && validSeq.includes(l.workout_id))
+      .sort((a, b) => new Date(b.date) - new Date(a.date))[0];
+
+    if (!lastLog) {
+      // No history → start at beginning
+      return _state.workouts.find(w => w.id === validSeq[0]) || null;
+    }
+
+    const currentIdx = validSeq.indexOf(lastLog.workout_id);
+    const nextId = validSeq[(currentIdx + 1) % validSeq.length];
+    return _state.workouts.find(w => w.id === nextId) || null;
   },
 
   // ── Sessions / Logging ────────────────────────────────────────────────────

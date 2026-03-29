@@ -81,6 +81,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   if (user) {
     await Store.init(user.id);
+    Store.seedDefaultWorkouts();
     showNav();
     _startRouter();
   } else {
@@ -92,6 +93,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   onAuthChange(async (newUser) => {
     if (newUser) {
       await Store.init(newUser.id);
+      Store.seedDefaultWorkouts();
       showNav();
       _startRouter();
     } else {

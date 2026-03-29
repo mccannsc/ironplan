@@ -1,6 +1,6 @@
 import { Store } from '../store.js';
 import { navigate } from '../router.js';
-import { fmtDate, timeAgo, fmtDuration, today } from '../utils.js';
+import { fmtDate, timeAgo, fmtDuration, today, esc } from '../utils.js';
 import { EXERCISES_MAP, MUSCLE_LABELS } from '../data/exercises.js?v=5';
 import { logout } from '../app.js';
 
@@ -26,6 +26,7 @@ export function renderDashboard() {
   const lastLog = recentLogs[0] || null;
   const lastWorkout = lastLog ? workouts.find(w => w.id === lastLog.workout_id) : null;
   const weekStats = Store.getWeeklyStats();
+  const nextWorkout = Store.getNextWorkout();
 
   const view = document.getElementById('view');
   view.innerHTML = `
@@ -50,6 +51,8 @@ export function renderDashboard() {
       </header>
 
       ${activeSession ? _resumeCard(activeSession, workouts) : ''}
+
+      ${nextWorkout && !activeSession ? _nextWorkoutCard(nextWorkout) : ''}
 
       ${_weekSection(weekStats)}
 
@@ -125,6 +128,37 @@ export function renderDashboard() {
   document.getElementById('bw-input')?.addEventListener('keydown', e => {
     if (e.key === 'Enter') document.getElementById('bw-save-btn')?.click();
   });
+
+  document.getElementById('next-workout-start')?.addEventListener('click', () => {
+    if (nextWorkout) navigate(`/session/${nextWorkout.id}`);
+  });
+
+  document.getElementById('next-workout-plan')?.addEventListener('click', () => {
+    if (nextWorkout) navigate(`/workouts/${nextWorkout.id}/plan`);
+  });
+}
+
+function _nextWorkoutCard(workout) {
+  const exCount = workout.exercises.length;
+  const muscles = _topMuscles(workout.exercises);
+  return `
+    <section class="section section--next">
+      <div class="section__header">
+        <h2 class="section__title">Next Workout</h2>
+        <button class="btn btn--ghost btn--xs" id="next-workout-plan">Plan →</button>
+      </div>
+      <div class="next-workout-card">
+        <div class="next-workout-card__info">
+          <div class="next-workout-card__name">${esc(workout.name)}</div>
+          <div class="next-workout-card__meta">${exCount} exercise${exCount !== 1 ? 's' : ''}</div>
+          ${muscles ? `<div class="next-workout-card__muscles">${muscles}</div>` : ''}
+        </div>
+        <button class="btn btn--accent next-workout-card__start" id="next-workout-start">
+          ▶ Start
+        </button>
+      </div>
+    </section>
+  `;
 }
 
 function _weekSection(stats) {
