@@ -54,12 +54,19 @@ function hideNav() {
 let _routerStarted = false;
 
 function _startRouter() {
+  const { activeSession } = Store.getState();
   if (_routerStarted) {
-    navigate('/');
+    // Re-auth: go straight to active session if one is in progress
+    navigate(activeSession ? `/session/${activeSession.workout_id}` : '/');
     return;
   }
   _routerStarted = true;
   updateNav();
+  // On initial load: if a session is in progress, override the hash so the
+  // router dispatches to the session screen rather than whatever was last open
+  if (activeSession) {
+    window.location.hash = `/session/${activeSession.workout_id}`;
+  }
   initRouter();
 }
 

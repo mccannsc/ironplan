@@ -21,6 +21,40 @@ const _sessionPBs = new Set(); // exercise IDs that hit a new PB this session
 
 // ─── Rest Timer ─────────────────────────────────────────────────────────────
 
+const _REST_KEY = 'ironplan_rest_v1';
+
+function _saveRestState(startedAt, duration) {
+  try { localStorage.setItem(_REST_KEY, JSON.stringify({ startedAt, duration })); } catch (_) {}
+}
+
+function _loadRestState() {
+  try { return JSON.parse(localStorage.getItem(_REST_KEY)); } catch (_) { return null; }
+}
+
+function _clearRestState() {
+  try { localStorage.removeItem(_REST_KEY); } catch (_) {}
+}
+
+function _requestNotifPermission() {
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission().catch(() => {});
+  }
+}
+
+function _onRestComplete() {
+  if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
+  toast("Let's go! Next set!", 'success', 4000);
+  if (document.hidden && 'Notification' in window && Notification.permission === 'granted') {
+    try {
+      new Notification('IronPlan – Rest complete', {
+        body: "Let's go! Next set! 💪",
+        icon: '/icons/icon-192.png',
+        tag: 'rest-timer',
+      });
+    } catch (_) {}
+  }
+}
+
 function _getRestDuration(ex) {
   const compound = ['push', 'pull', 'squat', 'hinge'];
   if (compound.includes(ex?.pattern)) return 120;
@@ -30,7 +64,15 @@ function _getRestDuration(ex) {
 
 function _startRestTimer(duration) {
   _clearRestTimer();
-  let remaining = duration;
+  _requestNotifPermission();
+  const startedAt = Date.now();
+  _saveRestState(startedAt, duration);
+  _runRestTimer(startedAt, duration);
+}
+
+function _runRestTimer(startedAt, totalDuration) {
+  if (_restInterval) { clearInterval(_restInterval); _restInterval = null; }
+
   let el = document.getElementById('rest-timer');
   if (!el) {
     el = document.createElement('div');
@@ -40,7 +82,13 @@ function _startRestTimer(duration) {
   }
 
   function update() {
-    const pct = (remaining / duration) * 100;
+    const remaining = Math.ceil(totalDuration - (Date.now() - startedAt) / 1000);
+    if (remaining <= 0) {
+      _clearRestTimer();
+      _onRestComplete();
+      return;
+    }
+    const pct = Math.max(0, (remaining / totalDuration) * 100);
     el.innerHTML = `
       <div class="rest-timer__inner">
         <div class="rest-timer__info">
@@ -57,21 +105,16 @@ function _startRestTimer(duration) {
   }
 
   update();
-  _restInterval = setInterval(() => {
-    remaining--;
-    if (remaining <= 0) {
-      _clearRestTimer();
-      if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
-    } else {
-      update();
-    }
-  }, 1000);
+  _restInterval = setInterval(update, 500);
 }
+
+export function clearRestTimer() { _clearRestTimer(); }
 
 function _clearRestTimer() {
   if (_restInterval) { clearInterval(_restInterval); _restInterval = null; }
   const el = document.getElementById('rest-timer');
   if (el) el.remove();
+  _clearRestState();
 }
 
 export function renderSession({ workoutId }) {
@@ -146,7 +189,19 @@ function _renderSessionUI(workout, session) {
     </div>
   `;
 
-  // Start timer
+  // Resume rest timer if one was in progress (survives navigation / reload)
+  const savedRest = _loadRestState();
+  if (savedRest) {
+    const remaining = savedRest.duration - Math.floor((Date.now() - savedRest.startedAt) / 1000);
+    if (remaining > 0) {
+      _runRestTimer(savedRest.startedAt, savedRest.duration);
+    } else {
+      _clearRestState();
+      _onRestComplete();
+    }
+  }
+
+  // Start session timer
   const started = new Date(session.started_at);
   function updateTimer() {
     const elapsed = Math.floor((Date.now() - started) / 1000);
@@ -156,11 +211,10 @@ function _renderSessionUI(workout, session) {
   updateTimer();
   _timerInterval = setInterval(updateTimer, 1000);
 
-  // Back / exit
+  // Back / exit — rest timer intentionally keeps running as overlay
   document.getElementById('session-back-btn').addEventListener('click', () => {
     if (confirm('Leave this session? Progress is saved and you can resume later.')) {
       clearInterval(_timerInterval);
-      _clearRestTimer();
       navigate('/');
     }
   });
@@ -169,7 +223,7 @@ function _renderSessionUI(workout, session) {
   document.getElementById('finish-btn').addEventListener('click', () => {
     const completed = Store.completeSession();
     clearInterval(_timerInterval);
-    _clearRestTimer();
+    _clearRestTimer(); // explicitly clear rest timer on completion
     showSummary(completed, workout);
   });
 

@@ -3,6 +3,7 @@ import { navigate } from '../router.js';
 import { fmtDate, timeAgo, fmtDuration, today, esc } from '../utils.js';
 import { EXERCISES_MAP, MUSCLE_LABELS } from '../data/exercises.js?v=6';
 import { logout } from '../app.js';
+import { clearRestTimer } from './session.js';
 
 export function renderDashboard() {
   const { workouts, workoutLogs, activeSession } = Store.getState();
@@ -112,6 +113,7 @@ export function renderDashboard() {
 
   document.getElementById('cancel-session-btn')?.addEventListener('click', () => {
     if (confirm('Discard this active session?')) {
+      clearRestTimer();
       Store.cancelSession();
       renderDashboard();
     }
