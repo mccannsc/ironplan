@@ -20,6 +20,9 @@
 
   <div id="app">
 
+    <!-- ── Sync status indicator ─────────────────────── -->
+    <div id="sync-indicator" class="sync-indicator sync-indicator--hidden" role="status" aria-live="polite"></div>
+
     <!-- ── Main content view ──────────────────────────── -->
     <div id="view" role="main"></div>
 
@@ -81,7 +84,7 @@
   <div id="toast-container" aria-live="polite" aria-atomic="false"></div>
 
   <!-- ── App ────────────────────────────────────────── -->
-  <script type="module" src="js/app.js?v=9"></script>
+  <script type="module" src="js/app.js?v=10"></script>
 
   <!-- Log nav button: smart routing -->
   <script type="module">

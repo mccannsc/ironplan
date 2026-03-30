@@ -1824,3 +1824,25 @@ input[type=number] { -moz-appearance: textfield; }
   padding: 4px 0 0;
   margin-top: 4px;
 }
+
+/* ─── Sync status indicator ──────────────────────────────────────────────── */
+.sync-indicator {
+  position: fixed;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9999;
+  padding: 6px 16px;
+  border-radius: 0 0 var(--r) var(--r);
+  font-size: 12px;
+  font-weight: 500;
+  text-align: center;
+  max-width: var(--max-w);
+  width: 100%;
+  box-sizing: border-box;
+  transition: opacity 0.2s;
+}
+.sync-indicator--hidden  { display: none; }
+.sync-indicator--offline { background: var(--surface-3); color: var(--text-2); }
+.sync-indicator--syncing { background: var(--blue-dim);  color: var(--blue); }
+.sync-indicator--failed  { background: var(--red-dim);   color: var(--red); cursor: pointer; }
