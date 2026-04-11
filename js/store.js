@@ -1,41 +1,80 @@
 /**
  * IronPlan Store – Supabase-backed state management.
  *
- * In-memory state is the source of truth for the UI; Supabase is synced in the
- * background.  activeSession is persisted to localStorage only (it's transient).
+ * Persistence:
+ *   - Workout templates  → localStorage (WORKOUTS_KEY). Supabase `workouts` gets
+ *     {id, user_id, name} only (no exercises JSONB — that column doesn't exist).
+ *   - Completed sessions → Supabase `workout_sessions` + `set_logs`.
+ *   - Active session     → localStorage only (transient; written to Supabase on
+ *     completeSession / addWorkoutLog).
+ *
+ * All Supabase ID columns are UUID type.  Text IDs from uid() are mapped to
+ * deterministic UUIDs via _textToUUID(ns, key) so the same text ID always
+ * produces the same UUID without needing to store the mapping.
  */
 
 import { supabase } from './lib/supabase.js';
-import { debounce } from './utils.js';
 import { DEFAULT_WORKOUTS } from './data/defaults.js';
+import { EXERCISES } from './data/exercises.js?v=6';
 
-const SESSION_KEY  = 'ironplan_session_v1';
-const SEQUENCE_KEY = 'ironplan_sequence_v1';
+// ─── Storage keys ─────────────────────────────────────────────────────────────
+
+const SESSION_KEY   = 'ironplan_session_v1';
+const WORKOUTS_KEY  = 'ironplan_workouts_v2';
+const EX_SEEDED_KEY = 'ironplan_ex_seeded_v1';
+
+// ─── State ────────────────────────────────────────────────────────────────────
 
 const DEFAULT_STATE = {
-  workouts: [],
+  workouts:    [],
   workoutLogs: [],
   activeSession: null,
 };
 
-let _state = { ...DEFAULT_STATE, activeSession: _loadSession() };
+let _state  = { ...DEFAULT_STATE, activeSession: _loadSession() };
 let _userId = null;
 const _listeners = new Set();
-let _notes = {};
+let _notes        = {};
 let _bodyweightLogs = [];
-let _sequence = _loadSequence();
 
-function _loadSequence() {
-  try { return JSON.parse(localStorage.getItem(SEQUENCE_KEY)) || []; }
-  catch (_) { return []; }
+// ─── Deterministic UUID helper ────────────────────────────────────────────────
+// Produces a stable UUID-format string from any (namespace, key) pair.
+// Uses FNV-1a 32-bit hashed 4× (128 bits total) — no async crypto needed.
+
+function _textToUUID(ns, key) {
+  const str = ns + ':' + key;
+  function fnv32(s, offset) {
+    let h = (offset || 2166136261) >>> 0;
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 16777619) >>> 0;
+    }
+    return h;
+  }
+  const a = fnv32(str).toString(16).padStart(8, '0');
+  const b = fnv32(str + '\x01').toString(16).padStart(8, '0');
+  const c = fnv32(str + '\x02').toString(16).padStart(8, '0');
+  const d = fnv32(str + '\x03').toString(16).padStart(8, '0');
+  const h = a + b + c + d; // 32 hex chars = 128 bits
+  return `${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20,32)}`;
 }
 
-function _saveSequence(ids) {
-  try { localStorage.setItem(SEQUENCE_KEY, JSON.stringify(ids)); }
-  catch (_) { /* ignore */ }
+// If a string already looks like a UUID, return it unchanged; otherwise map it.
+function _toSessionUUID(id) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
+    ? id
+    : _textToUUID('ip-s', id);
 }
 
-// ─── Session (localStorage only) ─────────────────────────────────────────────
+// ─── Exercise UUID reverse-map ────────────────────────────────────────────────
+// Build once: UUID → exercise text ID (for converting set_logs back to in-memory format)
+
+const _exUUIDtoTextId = {};
+EXERCISES.forEach(ex => {
+  _exUUIDtoTextId[_textToUUID('ip-ex', ex.id)] = ex.id;
+});
+
+// ─── localStorage helpers ─────────────────────────────────────────────────────
 
 function _loadSession() {
   try {
@@ -51,6 +90,18 @@ function _saveSession(session) {
   } catch (_) { /* ignore */ }
 }
 
+function _loadWorkoutsLocal() {
+  try {
+    const raw = localStorage.getItem(WORKOUTS_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch (_) { return []; }
+}
+
+function _saveWorkoutsLocal(workouts) {
+  try { localStorage.setItem(WORKOUTS_KEY, JSON.stringify(workouts)); }
+  catch (_) { /* ignore */ }
+}
+
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
 function _notify() { _listeners.forEach(fn => fn(_state)); }
@@ -60,78 +111,186 @@ function _set(updater) {
   _notify();
 }
 
-// ─── Supabase sync helpers ────────────────────────────────────────────────────
+// ─── Supabase: workout sync ───────────────────────────────────────────────────
 
 async function _upsertWorkout(workout) {
   if (!_userId) return;
   const { error } = await supabase.from('workouts').upsert({
-    id: workout.id,
+    id:      _textToUUID('ip-wk', workout.id),
     user_id: _userId,
-    name: workout.name,
-    exercises: workout.exercises,
-  });
+    name:    workout.name,
+  }, { onConflict: 'id' });
   if (error) console.error('Workout sync error:', error);
 }
 
 async function _deleteWorkoutRemote(id) {
   if (!_userId) return;
-  const { error } = await supabase.from('workouts').delete().eq('id', id);
+  const wkUUID = _textToUUID('ip-wk', id);
+  // Cascade on workout_sessions (and their set_logs) is handled by Supabase FK
+  supabase.from('workout_sessions').delete().eq('workout_id', wkUUID).then(({ error }) => {
+    if (error) console.error('Sessions delete error:', error);
+  });
+  const { error } = await supabase.from('workouts').delete().eq('id', wkUUID);
   if (error) console.error('Workout delete error:', error);
 }
 
-async function _upsertLog(log) {
+// ─── Supabase: session & set-log sync ─────────────────────────────────────────
+
+async function _upsertSession(session) {
   if (!_userId) return;
-  const { error } = await supabase.from('workout_logs').upsert({
-    id: log.id,
-    user_id: _userId,
-    workout_id: log.workout_id,
-    date: log.date,
-    started_at: log.started_at,
-    completed_at: log.completed_at ?? null,
-    completed: log.completed,
-    exercises: log.exercises,
-  });
-  if (error) console.error('Log sync error:', error);
+  const { error } = await supabase.from('workout_sessions').upsert({
+    id:         _toSessionUUID(session.id),
+    user_id:    _userId,
+    workout_id: _textToUUID('ip-wk', session.workout_id),
+    date:       session.date,
+  }, { onConflict: 'id' });
+  if (error) console.error('Session upsert error:', error);
 }
 
-// Debounced session sync – avoids hammering Supabase on every set tap
-const _syncSessionDebounced = debounce((session) => {
-  if (session) _upsertLog(session);
-}, 1000);
+async function _insertSetLogs(sessionTextId, exercises) {
+  if (!_userId || !exercises?.length) return;
+  const sessionUUID = _toSessionUUID(sessionTextId);
+  const rows = [];
+  for (const exLog of exercises) {
+    const exId   = exLog.substituted_exercise_id || exLog.exercise_id;
+    const exUUID = _textToUUID('ip-ex', exId);
+    (exLog.sets || []).forEach((s, i) => {
+      if (!s.completed) return;
+      rows.push({
+        id:         _textToUUID('ip-sl', `${sessionTextId}:${exId}:${i}`),
+        session_id: sessionUUID,
+        exercise_id: exUUID,
+        weight:     s.weight || 0,
+        reps:       s.reps   || 0,
+        set_number: i + 1,
+      });
+    });
+  }
+  if (!rows.length) return;
+  const { error } = await supabase.from('set_logs').upsert(rows, { onConflict: 'id' });
+  if (error) console.error('Set logs insert error:', error);
+}
+
+async function _deleteSetLogs(sessionId) {
+  if (!_userId) return;
+  const { error } = await supabase.from('set_logs').delete().eq('session_id', _toSessionUUID(sessionId));
+  if (error) console.error('Set logs delete error:', error);
+}
+
+// ─── Supabase: exercises table seed ──────────────────────────────────────────
+// set_logs.exercise_id FKs to exercises.id — seed once per device.
+
+async function _seedExercisesIfNeeded() {
+  if (!_userId) return;
+  if (localStorage.getItem(EX_SEEDED_KEY)) return;
+
+  // Check if already seeded (another device may have done it)
+  const { count } = await supabase.from('exercises').select('*', { count: 'exact', head: true });
+  if (count > 0) {
+    localStorage.setItem(EX_SEEDED_KEY, '1');
+    return;
+  }
+
+  const rows = EXERCISES.map(ex => ({
+    id:             _textToUUID('ip-ex', ex.id),
+    name:           ex.name,
+    primary_muscle: ex.primary_muscle,
+    equipment:      ex.equipment  || null,
+    pattern:        ex.pattern    || null,
+  }));
+
+  // ignoreDuplicates: true → INSERT ON CONFLICT DO NOTHING (no UPDATE policy needed)
+  for (let i = 0; i < rows.length; i += 50) {
+    const { error } = await supabase.from('exercises').upsert(
+      rows.slice(i, i + 50),
+      { onConflict: 'id', ignoreDuplicates: true }
+    );
+    if (error) {
+      console.error('Exercise seed error:', error);
+      return;
+    }
+  }
+  localStorage.setItem(EX_SEEDED_KEY, '1');
+}
+
+// ─── DB row → in-memory log ───────────────────────────────────────────────────
+// Converts a workout_sessions row (with nested set_logs) into the log shape
+// the rest of the app expects.
+
+function _sessionRowToLog(ws, wkUUIDtoTextId) {
+  const textWorkoutId = wkUUIDtoTextId[ws.workout_id] || ws.workout_id;
+
+  // Group set_logs by exercise UUID → text ID
+  const exMap = {};
+  for (const sl of (ws.set_logs || [])) {
+    const textExId = _exUUIDtoTextId[sl.exercise_id] || sl.exercise_id;
+    if (!exMap[textExId]) exMap[textExId] = [];
+    exMap[textExId].push(sl);
+  }
+
+  const exercises = Object.entries(exMap).map(([exId, sets]) => ({
+    exercise_id: exId,
+    sets: sets
+      .sort((a, b) => a.set_number - b.set_number)
+      .map(s => ({ weight: s.weight, reps: s.reps, completed: true })),
+  }));
+
+  return {
+    id:           ws.id,          // UUID string — used as logId in routes
+    workout_id:   textWorkoutId,
+    date:         ws.date.slice(0, 10), // normalize '2026-04-11T00:00:00' → '2026-04-11'
+    started_at:   null,
+    completed_at: null,
+    completed:    true,
+    exercises,
+  };
+}
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 export const Store = {
 
   /**
-   * Load all user data from Supabase. Must be called once after sign-in.
+   * Load all user data. Must be called once after sign-in.
    */
   async init(userId) {
     _userId = userId;
 
+    // Workouts live in localStorage (exercises/rep_range not in Supabase schema)
+    const localWorkouts = _loadWorkoutsLocal();
+
+    // Seed exercises table for FK integrity (no-op if already done)
+    await _seedExercisesIfNeeded();
+
+    // Fetch completed sessions + their set_logs, plus side-data
     const [
-      { data: workouts, error: we },
-      { data: logs, error: le },
+      { data: sessions, error: se },
       { data: notes },
       { data: bwLogs },
     ] = await Promise.all([
-      supabase.from('workouts').select('*').eq('user_id', userId).order('created_at'),
-      supabase.from('workout_logs').select('*').eq('user_id', userId).order('date', { ascending: false }),
+      supabase.from('workout_sessions')
+        .select('*, set_logs(*)')
+        .eq('user_id', userId)
+        .order('date', { ascending: false }),
       supabase.from('exercise_notes').select('*').eq('user_id', userId),
       supabase.from('bodyweight_logs').select('*').eq('user_id', userId).order('date', { ascending: false }),
     ]);
 
-    if (we) console.error('Workouts fetch error:', we);
-    if (le) console.error('Logs fetch error:', le);
+    if (se) console.error('Sessions fetch error:', se);
 
     _notes = {};
     (notes ?? []).forEach(n => { _notes[n.exercise_id] = n.note; });
     _bodyweightLogs = bwLogs ?? [];
 
-    _set({
-      workouts: workouts ?? [],
-      workoutLogs: logs ?? [],
+    // Build UUID → text ID map for workouts (to reverse-map workout_sessions.workout_id)
+    const wkUUIDtoTextId = {};
+    localWorkouts.forEach(w => {
+      wkUUIDtoTextId[_textToUUID('ip-wk', w.id)] = w.id;
     });
+
+    const workoutLogs = (sessions ?? []).map(ws => _sessionRowToLog(ws, wkUUIDtoTextId));
+
+    _set({ workouts: localWorkouts, workoutLogs });
   },
 
   getState() { return _state; },
@@ -145,6 +304,7 @@ export const Store = {
 
   addWorkout(workout) {
     _set(s => ({ workouts: [...s.workouts, workout] }));
+    _saveWorkoutsLocal(_state.workouts);
     _upsertWorkout(workout);
   },
 
@@ -152,32 +312,25 @@ export const Store = {
     _set(s => ({
       workouts: s.workouts.map(w => w.id === id ? { ...w, ...updates } : w),
     }));
+    _saveWorkoutsLocal(_state.workouts);
     const updated = _state.workouts.find(w => w.id === id);
     if (updated) _upsertWorkout(updated);
   },
 
   deleteWorkout(id) {
-    _sequence = _sequence.filter(sid => sid !== id);
-    _saveSequence(_sequence);
-
     _set(s => ({
-      workouts: s.workouts.filter(w => w.id !== id),
+      workouts:    s.workouts.filter(w => w.id !== id),
       workoutLogs: s.workoutLogs.filter(l => l.workout_id !== id),
     }));
+    _saveWorkoutsLocal(_state.workouts);
     _deleteWorkoutRemote(id);
-
-    if (_userId) {
-      supabase.from('workout_logs').delete().eq('workout_id', id).then(({ error }) => {
-        if (error) console.error('Log delete error:', error);
-      });
-    }
   },
 
   getWorkout(id) {
     return _state.workouts.find(w => w.id === id) || null;
   },
 
-  // ── Default workouts + sequence ────────────────────────────────────────────
+  // ── Default workouts ───────────────────────────────────────────────────────
 
   seedDefaultWorkouts() {
     if (_state.workouts.length > 0) return;
@@ -199,8 +352,7 @@ export const Store = {
       };
     });
     _set(s => ({ ...s, workouts: [...s.workouts, ...newWorkouts] }));
-    _sequence = newWorkouts.map(w => w.id);
-    _saveSequence(_sequence);
+    _saveWorkoutsLocal(_state.workouts);
     newWorkouts.forEach(w => _upsertWorkout(w));
   },
 
@@ -208,14 +360,12 @@ export const Store = {
     const { workouts, workoutLogs } = _state;
     if (!workouts.length) return null;
 
-    // Order workouts by order_position, fall back to creation order
     const ordered = [...workouts].sort((a, b) => {
       const pa = a.order_position ?? 9999;
       const pb = b.order_position ?? 9999;
       return pa !== pb ? pa - pb : 0;
     });
 
-    // Strict chronological: most recent completed log by workout_date
     const lastLog = [...workoutLogs]
       .filter(l => l.completed)
       .sort((a, b) => new Date(b.date) - new Date(a.date))[0];
@@ -233,13 +383,13 @@ export const Store = {
   startSession(workoutLog) {
     _set({ activeSession: workoutLog });
     _saveSession(workoutLog);
-    _upsertLog(workoutLog);
+    // Active (in-progress) sessions are localStorage-only until completed
   },
 
   updateSession(session) {
     _set({ activeSession: session });
     _saveSession(session);
-    _syncSessionDebounced(session);
+    // No Supabase sync mid-workout — only on complete
   },
 
   completeSession() {
@@ -247,24 +397,21 @@ export const Store = {
     if (!session) return;
     const completed = { ...session, completed: true, completed_at: new Date().toISOString() };
     _set(s => ({
-      // Deduplicate: remove any in-progress version before adding completed
       workoutLogs: [...s.workoutLogs.filter(l => l.id !== completed.id), completed],
       activeSession: null,
     }));
     _saveSession(null);
-    _upsertLog(completed);
+    // Persist to Supabase
+    _upsertSession(completed).then(() => {
+      _insertSetLogs(completed.id, completed.exercises || []);
+    });
     return completed;
   },
 
   cancelSession() {
-    const session = _state.activeSession;
     _set({ activeSession: null });
     _saveSession(null);
-    if (_userId && session?.id) {
-      supabase.from('workout_logs').delete().eq('id', session.id).then(({ error }) => {
-        if (error) console.error('Session cancel error:', error);
-      });
-    }
+    // No row to clean up in Supabase (never written mid-session)
   },
 
   getLastLog(workoutId) {
@@ -285,17 +432,23 @@ export const Store = {
       workoutLogs: s.workoutLogs.map(l => l.id === logId ? { ...l, ...updates } : l),
     }));
     const updated = _state.workoutLogs.find(l => l.id === logId);
-    if (updated) _upsertLog(updated);
+    if (updated) {
+      _upsertSession(updated).then(() => {
+        _deleteSetLogs(updated.id).then(() => {
+          _insertSetLogs(updated.id, updated.exercises || []);
+        });
+      });
+    }
   },
 
   addWorkoutLog(log) {
     _set(s => ({ workoutLogs: [...s.workoutLogs, log] }));
-    _upsertLog(log);
+    _upsertSession(log).then(() => {
+      _insertSetLogs(log.id, log.exercises || []);
+    });
   },
 
-  getBodyweightLogs() {
-    return _bodyweightLogs;
-  },
+  // ── Exercise data ──────────────────────────────────────────────────────────
 
   getLastNExerciseLogs(exerciseId, n = 3) {
     return _state.workoutLogs
@@ -427,7 +580,27 @@ export const Store = {
     if (error) console.error('Note save error:', error);
   },
 
-  // ── Weekly stats & bodyweight ──────────────────────────────────────────────
+  // ── Bodyweight ─────────────────────────────────────────────────────────────
+
+  getBodyweightLogs() {
+    return _bodyweightLogs;
+  },
+
+  async addBodyweight(weight, date = null) {
+    const d = date || new Date().toISOString().slice(0, 10);
+    _bodyweightLogs = [
+      { date: d, weight },
+      ..._bodyweightLogs.filter(b => b.date !== d),
+    ].sort((a, b) => new Date(b.date) - new Date(a.date));
+    if (!_userId) return;
+    const { error } = await supabase.from('bodyweight_logs').upsert(
+      { user_id: _userId, date: d, weight },
+      { onConflict: 'user_id,date' }
+    );
+    if (error) console.error('Bodyweight save error:', error);
+  },
+
+  // ── Weekly stats ───────────────────────────────────────────────────────────
 
   getWeeklyStats() {
     const now = new Date();
@@ -470,10 +643,6 @@ export const Store = {
       return Math.round(total / withDur.length);
     }
 
-    const lastCompleted = [..._state.workoutLogs]
-      .filter(l => l.completed && l.started_at && l.completed_at)
-      .sort((a, b) => new Date(b.date) - new Date(a.date))[0] || null;
-
     return {
       thisWeek: {
         workouts:        thisWeekLogs.length,
@@ -486,24 +655,8 @@ export const Store = {
         volume:   calcVolume(prevWeekLogs),
       },
       latestBodyweight: _bodyweightLogs[0] || null,
-      lastWorkoutDurationMins: lastCompleted
-        ? Math.floor((new Date(lastCompleted.completed_at) - new Date(lastCompleted.started_at)) / 60000)
-        : null,
+      lastWorkoutDurationMins: null, // no timestamps in workout_sessions schema
     };
-  },
-
-  async addBodyweight(weight, date = null) {
-    const d = date || new Date().toISOString().slice(0, 10);
-    _bodyweightLogs = [
-      { date: d, weight },
-      ..._bodyweightLogs.filter(b => b.date !== d),
-    ].sort((a, b) => new Date(b.date) - new Date(a.date));
-    if (!_userId) return;
-    const { error } = await supabase.from('bodyweight_logs').upsert(
-      { user_id: _userId, date: d, weight },
-      { onConflict: 'user_id,date' }
-    );
-    if (error) console.error('Bodyweight save error:', error);
   },
 
   getThisWeekLogs() {
@@ -531,7 +684,6 @@ export const Store = {
     );
     if (!thisWeekLogs.length) return [];
 
-    // Best lifts before this week (per exercise)
     const prevBests = {};
     for (const log of _state.workoutLogs) {
       if (!log.completed || toDate(log.date) >= weekStart) continue;
@@ -547,7 +699,6 @@ export const Store = {
       }
     }
 
-    // Find new PBs set this week
     const pbs = {};
     for (const log of thisWeekLogs) {
       for (const exLog of log.exercises) {
