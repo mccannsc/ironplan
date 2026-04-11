@@ -187,7 +187,7 @@ function _renderSessionUI(workout, session) {
           id="session-date-input"
           class="session-date-input"
           value="${session.date}"
-          max="${session.date}"
+          max="${today()}"
         />
       </div>
 

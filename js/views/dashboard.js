@@ -1,33 +1,18 @@
 import { Store } from '../store.js';
 import { navigate } from '../router.js';
-import { fmtDate, timeAgo, fmtDuration, today, esc } from '../utils.js';
+import { fmtDate, fmtWeight, fmtDuration, timeAgo, today, esc } from '../utils.js';
 import { EXERCISES_MAP, MUSCLE_LABELS } from '../data/exercises.js?v=6';
 import { logout } from '../app.js';
 import { clearRestTimer } from './session.js';
+import { toast } from '../components/toast.js';
+import { openModal, closeModal } from '../components/modal.js';
 
 export function renderDashboard() {
   const { workouts, workoutLogs, activeSession } = Store.getState();
-
-  // Sort workouts by usage recency
-  const workoutWithDates = workouts.map(w => {
-    const lastLog = Store.getLastLog(w.id);
-    return { ...w, lastDate: lastLog?.date || null };
-  }).sort((a, b) => {
-    if (!a.lastDate && !b.lastDate) return 0;
-    if (!a.lastDate) return 1;
-    if (!b.lastDate) return -1;
-    return new Date(b.lastDate) - new Date(a.lastDate);
-  });
-
-  const recentLogs = [...workoutLogs]
-    .filter(l => l.completed)
-    .sort((a, b) => new Date(b.date) - new Date(a.date))
-    .slice(0, 5);
-
-  const lastLog = recentLogs[0] || null;
-  const lastWorkout = lastLog ? workouts.find(w => w.id === lastLog.workout_id) : null;
   const weekStats = Store.getWeeklyStats();
   const nextWorkout = Store.getNextWorkout();
+  const thisWeekLogs = Store.getThisWeekLogs();
+  const pbs = Store.getPBsThisWeek();
 
   const view = document.getElementById('view');
   view.innerHTML = `
@@ -53,36 +38,16 @@ export function renderDashboard() {
 
       ${activeSession ? _resumeCard(activeSession, workouts) : ''}
 
-      ${nextWorkout && !activeSession ? _nextWorkoutCard(nextWorkout) : ''}
+      ${nextWorkout && !activeSession ? _nextWorkoutCard(nextWorkout, workouts) : ''}
 
-      ${_weekSection(weekStats)}
+      ${_weekSection(weekStats, thisWeekLogs, pbs, workouts)}
 
-      ${lastWorkout ? `
+      ${workouts.length === 0 ? `
         <section class="section">
-          <h2 class="section__title">Last Workout</h2>
-          <div class="last-workout-card">
-            <div class="last-workout-card__name">${lastWorkout.name}</div>
-            <div class="last-workout-card__date">${fmtDate(lastLog.date)}</div>
-          </div>
-        </section>
-      ` : ''}
-
-      <section class="section">
-        <div class="section__header">
-          <h2 class="section__title">Your Workouts</h2>
-          <button class="btn btn--ghost btn--sm" id="new-workout-btn">+ New</button>
-        </div>
-        ${workoutWithDates.length === 0
-          ? _emptyWorkouts()
-          : `<div class="workout-grid">${workoutWithDates.map(_workoutCard).join('')}</div>`
-        }
-      </section>
-
-      ${recentLogs.length > 0 ? `
-        <section class="section">
-          <h2 class="section__title">Recent Activity</h2>
-          <div class="activity-list">
-            ${recentLogs.map(l => _activityRow(l, workouts)).join('')}
+          <div class="empty-state">
+            <div class="empty-state__icon">🏋️</div>
+            <p class="empty-state__text">Start your first workout</p>
+            <button class="btn btn--accent" id="create-first-btn">Create Workout</button>
           </div>
         </section>
       ` : ''}
@@ -96,16 +61,7 @@ export function renderDashboard() {
     if (confirm('Sign out of IronPlan?')) logout();
   });
 
-  document.getElementById('new-workout-btn')?.addEventListener('click', () => navigate('/workouts/new'));
   document.getElementById('create-first-btn')?.addEventListener('click', () => navigate('/workouts/new'));
-
-  document.querySelectorAll('[data-start-workout]').forEach(btn => {
-    btn.addEventListener('click', () => navigate(`/session/${btn.dataset.startWorkout}`));
-  });
-
-  document.querySelectorAll('[data-view-workout]').forEach(btn => {
-    btn.addEventListener('click', () => navigate(`/workouts/${btn.dataset.viewWorkout}/plan`));
-  });
 
   document.getElementById('resume-session-btn')?.addEventListener('click', () => {
     if (activeSession) navigate(`/session/${activeSession.workout_id}`);
@@ -119,18 +75,6 @@ export function renderDashboard() {
     }
   });
 
-  document.getElementById('bw-save-btn')?.addEventListener('click', async () => {
-    const input = document.getElementById('bw-input');
-    const val = parseFloat(input?.value);
-    if (!val || val <= 0) return;
-    await Store.addBodyweight(val);
-    renderDashboard();
-  });
-
-  document.getElementById('bw-input')?.addEventListener('keydown', e => {
-    if (e.key === 'Enter') document.getElementById('bw-save-btn')?.click();
-  });
-
   document.getElementById('next-workout-start')?.addEventListener('click', () => {
     if (nextWorkout) navigate(`/session/${nextWorkout.id}`);
   });
@@ -138,41 +82,82 @@ export function renderDashboard() {
   document.getElementById('next-workout-plan')?.addEventListener('click', () => {
     if (nextWorkout) navigate(`/workouts/${nextWorkout.id}/plan`);
   });
+
+  document.getElementById('next-workout-past')?.addEventListener('click', () => {
+    if (!nextWorkout) return;
+    _openWorkoutPicker(workouts, (selected) => {
+      navigate(`/session/${selected.id}`);
+    });
+  });
+
+  document.getElementById('bw-save-btn')?.addEventListener('click', async () => {
+    const input = document.getElementById('bw-input');
+    const val = parseFloat(input?.value);
+    if (!val || val <= 0) return;
+    await Store.addBodyweight(val);
+    toast('Weight logged', 'success');
+    input.value = '';
+    renderDashboard();
+  });
+
+  document.getElementById('bw-input')?.addEventListener('keydown', e => {
+    if (e.key === 'Enter') document.getElementById('bw-save-btn')?.click();
+  });
 }
 
-function _nextWorkoutCard(workout) {
+function _nextWorkoutCard(workout, workouts) {
   const exCount = workout.exercises.length;
   const muscles = _topMuscles(workout.exercises);
+  const lastLog = Store.getLastLog(workout.id);
+
   return `
     <section class="section section--next">
       <div class="section__header">
         <h2 class="section__title">Next Workout</h2>
         <button class="btn btn--ghost btn--xs" id="next-workout-plan">Plan →</button>
       </div>
-      <div class="section__sub">Based on your last completed workout</div>
       <div class="next-workout-card">
         <div class="next-workout-card__info">
           <div class="next-workout-card__name">${esc(workout.name)}</div>
-          <div class="next-workout-card__meta">${exCount} exercise${exCount !== 1 ? 's' : ''}</div>
+          <div class="next-workout-card__meta">${exCount} exercise${exCount !== 1 ? 's' : ''}${lastLog ? ` · Last: ${timeAgo(lastLog.date)}` : ''}</div>
           ${muscles ? `<div class="next-workout-card__muscles">${muscles}</div>` : ''}
         </div>
-        <button class="btn btn--accent next-workout-card__start" id="next-workout-start">
-          ▶ Start
-        </button>
+        <div class="next-workout-card__btns">
+          <button class="btn btn--accent next-workout-card__start" id="next-workout-start">▶ Start</button>
+          <button class="btn btn--ghost btn--sm" id="next-workout-past">+ Past</button>
+        </div>
       </div>
     </section>
   `;
 }
 
-function _weekSection(stats) {
-  const { thisWeek, prevWeek, latestBodyweight, lastWorkoutDurationMins } = stats;
+function _weekSection(stats, thisWeekLogs, pbs, workouts) {
+  const { thisWeek, prevWeek, latestBodyweight } = stats;
   const volumeDelta = prevWeek.volume > 0
     ? Math.round(((thisWeek.volume - prevWeek.volume) / prevWeek.volume) * 100)
     : null;
   const volSign = volumeDelta > 0 ? '+' : '';
   const volColor = volumeDelta > 0 ? 'green' : volumeDelta < 0 ? 'red' : '';
-
   const fmtVol = v => v >= 1000 ? (v / 1000).toFixed(1) + 'k' : v.toString();
+
+  const weekWorkoutNames = thisWeekLogs.map(l => {
+    const w = workouts.find(w => w.id === l.workout_id);
+    return `<div class="week-workout-item">
+      <span class="week-workout-item__dot">✓</span>
+      <span class="week-workout-item__name">${esc(w?.name || 'Workout')}</span>
+      <span class="week-workout-item__date">${fmtDate(l.date)}</span>
+    </div>`;
+  }).join('');
+
+  const pbList = pbs.length > 0 ? `
+    <div class="week-pbs">
+      <div class="week-pbs__label">🏆 PBs this week</div>
+      ${pbs.map(pb => {
+        const ex = EXERCISES_MAP[pb.exerciseId];
+        return `<span class="week-pb-chip">${esc(ex?.name || 'Exercise')}: ${fmtWeight(pb.weight)}kg×${pb.reps}</span>`;
+      }).join('')}
+    </div>
+  ` : '';
 
   return `
     <section class="section">
@@ -192,19 +177,11 @@ function _weekSection(stats) {
           <div class="week-stat__label">Volume kg</div>
           ${volumeDelta !== null ? `<div class="week-stat__delta week-stat__delta--${volColor}">${volSign}${volumeDelta}%</div>` : ''}
         </div>
-        ${thisWeek.avgDurationMins !== null ? `
-        <div class="week-stat">
-          <div class="week-stat__value">${thisWeek.avgDurationMins}m</div>
-          <div class="week-stat__label">Avg Duration</div>
-          ${lastWorkoutDurationMins !== null ? `<div class="week-stat__delta">last ${lastWorkoutDurationMins}m</div>` : ''}
-        </div>
-        ` : (lastWorkoutDurationMins !== null ? `
-        <div class="week-stat">
-          <div class="week-stat__value">${lastWorkoutDurationMins}m</div>
-          <div class="week-stat__label">Last Duration</div>
-        </div>
-        ` : '')}
       </div>
+
+      ${thisWeekLogs.length > 0 ? `<div class="week-workouts">${weekWorkoutNames}</div>` : ''}
+      ${pbList}
+
       <div class="bw-row">
         <div class="bw-row__current">
           ${latestBodyweight
@@ -228,17 +205,6 @@ function _weekSection(stats) {
   `;
 }
 
-function _greeting() {
-  const h = new Date().getHours();
-  if (h < 12) return 'Good morning';
-  if (h < 17) return 'Good afternoon';
-  return 'Good evening';
-}
-
-function _fmtToday() {
-  return new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
-}
-
 function _resumeCard(session, workouts) {
   const workout = workouts.find(w => w.id === session.workout_id);
   const name = workout?.name || 'Workout';
@@ -248,7 +214,7 @@ function _resumeCard(session, workouts) {
     <div class="resume-card">
       <div class="resume-card__icon">▶</div>
       <div class="resume-card__info">
-        <div class="resume-card__name">${name}</div>
+        <div class="resume-card__name">${esc(name)}</div>
         <div class="resume-card__sub">Started ${fmtDuration(elapsed)} ago – in progress</div>
       </div>
       <div class="resume-card__actions">
@@ -259,24 +225,29 @@ function _resumeCard(session, workouts) {
   `;
 }
 
-function _workoutCard(w) {
-  const exCount = w.exercises.length;
-  const ago = w.lastDate ? timeAgo(w.lastDate) : 'Never done';
-  const muscles = _topMuscles(w.exercises);
+function _openWorkoutPicker(workouts, onSelect) {
+  if (workouts.length === 0) { navigate('/workouts/new'); return; }
+  if (workouts.length === 1) { onSelect(workouts[0]); return; }
 
-  return `
-    <div class="workout-card">
-      <div class="workout-card__main" data-view-workout="${w.id}">
-        <div class="workout-card__name">${w.name}</div>
-        <div class="workout-card__meta">${exCount} exercise${exCount !== 1 ? 's' : ''}</div>
-        ${muscles ? `<div class="workout-card__muscles">${muscles}</div>` : ''}
-        <div class="workout-card__date">${ago}</div>
-      </div>
-      <button class="workout-card__start btn btn--accent" data-start-workout="${w.id}" aria-label="Start ${w.name}">
-        ▶
-      </button>
+  const body = `
+    <div class="picker-simple">
+      ${workouts.map(w => `
+        <button class="picker-simple-item" data-pick-workout="${w.id}">
+          <span class="picker-simple-item__name">${esc(w.name)}</span>
+          <span class="picker-simple-item__arrow">›</span>
+        </button>
+      `).join('')}
     </div>
   `;
+
+  openModal({ title: 'Log Past Workout', body });
+
+  document.querySelectorAll('[data-pick-workout]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const w = workouts.find(x => x.id === btn.dataset.pickWorkout);
+      if (w) { closeModal(); onSelect(w); }
+    });
+  });
 }
 
 function _topMuscles(exercises) {
@@ -292,31 +263,13 @@ function _topMuscles(exercises) {
     .join('');
 }
 
-function _activityRow(log, workouts) {
-  const workout = workouts.find(w => w.id === log.workout_id);
-  const name = workout?.name || 'Workout';
-  const totalSets = log.exercises.reduce((n, e) => n + e.sets.filter(s => s.completed).length, 0);
-  const duration = log.completed_at && log.started_at
-    ? fmtDuration(Math.floor((new Date(log.completed_at) - new Date(log.started_at)) / 1000))
-    : '';
-
-  return `
-    <div class="activity-row">
-      <div class="activity-row__icon">✓</div>
-      <div class="activity-row__info">
-        <div class="activity-row__name">${name}</div>
-        <div class="activity-row__meta">${timeAgo(log.date)} · ${totalSets} sets${duration ? ` · ${duration}` : ''}</div>
-      </div>
-    </div>
-  `;
+function _greeting() {
+  const h = new Date().getHours();
+  if (h < 12) return 'Good morning';
+  if (h < 17) return 'Good afternoon';
+  return 'Good evening';
 }
 
-function _emptyWorkouts() {
-  return `
-    <div class="empty-state">
-      <div class="empty-state__icon">🏋️</div>
-      <p class="empty-state__text">No workouts yet.<br>Build your first split.</p>
-      <button class="btn btn--accent" id="create-first-btn">Create Workout</button>
-    </div>
-  `;
+function _fmtToday() {
+  return new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
 }

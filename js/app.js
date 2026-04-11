@@ -12,6 +12,7 @@ import { renderSession } from './views/session.js';
 import { renderExercises, renderExerciseDetail } from './views/exercises.js';
 import { renderPlan } from './views/plan.js';
 import { renderSummary } from './views/summary.js';
+import { renderHistory, renderEditLog, renderDuplicateLog } from './views/history.js';
 
 // ─── Routes ────────────────────────────────────────────────────────────────
 
@@ -25,6 +26,9 @@ onRoute('/session/:workoutId', ({ workoutId }) => renderSession({ workoutId }));
 onRoute('/exercises', () => renderExercises());
 onRoute('/exercises/:id', ({ id }) => renderExerciseDetail({ id }));
 onRoute('/summary', () => renderSummary());
+onRoute('/history', () => renderHistory());
+onRoute('/history/:logId/edit', ({ logId }) => renderEditLog({ logId }));
+onRoute('/history/:logId/duplicate', ({ logId }) => renderDuplicateLog({ logId }));
 
 // ─── Nav ───────────────────────────────────────────────────────────────────
 

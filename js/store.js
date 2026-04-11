@@ -205,15 +205,27 @@ export const Store = {
   },
 
   getNextWorkout() {
-    const validSeq = _sequence.filter(id => _state.workouts.some(w => w.id === id));
-    if (validSeq.length === 0) return _state.workouts[0] || null;
-    const lastLog = [..._state.workoutLogs]
-      .filter(l => l.completed && validSeq.includes(l.workout_id))
+    const { workouts, workoutLogs } = _state;
+    if (!workouts.length) return null;
+
+    // Order workouts by order_position, fall back to creation order
+    const ordered = [...workouts].sort((a, b) => {
+      const pa = a.order_position ?? 9999;
+      const pb = b.order_position ?? 9999;
+      return pa !== pb ? pa - pb : 0;
+    });
+
+    // Strict chronological: most recent completed log by workout_date
+    const lastLog = [...workoutLogs]
+      .filter(l => l.completed)
       .sort((a, b) => new Date(b.date) - new Date(a.date))[0];
-    if (!lastLog) return _state.workouts.find(w => w.id === validSeq[0]) || null;
-    const currentIdx = validSeq.indexOf(lastLog.workout_id);
-    const nextId = validSeq[(currentIdx + 1) % validSeq.length];
-    return _state.workouts.find(w => w.id === nextId) || null;
+
+    if (!lastLog) return ordered[0];
+
+    const idx = ordered.findIndex(w => w.id === lastLog.workout_id);
+    if (idx === -1) return ordered[0];
+
+    return ordered[(idx + 1) % ordered.length];
   },
 
   // ── Sessions / Logging ─────────────────────────────────────────────────────
@@ -266,6 +278,23 @@ export const Store = {
     return _state.workoutLogs
       .filter(l => l.workout_id === workoutId)
       .sort((a, b) => new Date(b.date) - new Date(a.date));
+  },
+
+  updateWorkoutLog(logId, updates) {
+    _set(s => ({
+      workoutLogs: s.workoutLogs.map(l => l.id === logId ? { ...l, ...updates } : l),
+    }));
+    const updated = _state.workoutLogs.find(l => l.id === logId);
+    if (updated) _upsertLog(updated);
+  },
+
+  addWorkoutLog(log) {
+    _set(s => ({ workoutLogs: [...s.workoutLogs, log] }));
+    _upsertLog(log);
+  },
+
+  getBodyweightLogs() {
+    return _bodyweightLogs;
   },
 
   getLastNExerciseLogs(exerciseId, n = 3) {
@@ -463,15 +492,81 @@ export const Store = {
     };
   },
 
-  async addBodyweight(weight) {
-    const date = new Date().toISOString().slice(0, 10);
-    _bodyweightLogs = [{ date, weight }, ..._bodyweightLogs.filter(b => b.date !== date)];
+  async addBodyweight(weight, date = null) {
+    const d = date || new Date().toISOString().slice(0, 10);
+    _bodyweightLogs = [
+      { date: d, weight },
+      ..._bodyweightLogs.filter(b => b.date !== d),
+    ].sort((a, b) => new Date(b.date) - new Date(a.date));
     if (!_userId) return;
     const { error } = await supabase.from('bodyweight_logs').upsert(
-      { user_id: _userId, date, weight },
+      { user_id: _userId, date: d, weight },
       { onConflict: 'user_id,date' }
     );
     if (error) console.error('Bodyweight save error:', error);
+  },
+
+  getThisWeekLogs() {
+    const now = new Date();
+    const day = now.getDay();
+    const weekStart = new Date(now);
+    weekStart.setDate(now.getDate() - (day === 0 ? 6 : day - 1));
+    weekStart.setHours(0, 0, 0, 0);
+    function toDate(str) { return new Date(str + 'T00:00:00'); }
+    return _state.workoutLogs
+      .filter(l => l.completed && toDate(l.date) >= weekStart)
+      .sort((a, b) => new Date(b.date) - new Date(a.date));
+  },
+
+  getPBsThisWeek() {
+    const now = new Date();
+    const day = now.getDay();
+    const weekStart = new Date(now);
+    weekStart.setDate(now.getDate() - (day === 0 ? 6 : day - 1));
+    weekStart.setHours(0, 0, 0, 0);
+    function toDate(str) { return new Date(str + 'T00:00:00'); }
+
+    const thisWeekLogs = _state.workoutLogs.filter(l =>
+      l.completed && toDate(l.date) >= weekStart
+    );
+    if (!thisWeekLogs.length) return [];
+
+    // Best lifts before this week (per exercise)
+    const prevBests = {};
+    for (const log of _state.workoutLogs) {
+      if (!log.completed || toDate(log.date) >= weekStart) continue;
+      for (const exLog of log.exercises) {
+        const exId = exLog.substituted_exercise_id || exLog.exercise_id;
+        for (const s of exLog.sets) {
+          if (!s.completed || s.weight === 0) continue;
+          if (!prevBests[exId] || s.weight > prevBests[exId].weight ||
+              (s.weight === prevBests[exId].weight && s.reps > prevBests[exId].reps)) {
+            prevBests[exId] = { weight: s.weight, reps: s.reps };
+          }
+        }
+      }
+    }
+
+    // Find new PBs set this week
+    const pbs = {};
+    for (const log of thisWeekLogs) {
+      for (const exLog of log.exercises) {
+        const exId = exLog.substituted_exercise_id || exLog.exercise_id;
+        for (const s of exLog.sets) {
+          if (!s.completed || s.weight === 0) continue;
+          const prev = prevBests[exId];
+          const isNewPB = !prev || s.weight > prev.weight ||
+            (s.weight === prev.weight && s.reps > prev.reps);
+          if (isNewPB) {
+            if (!pbs[exId] || s.weight > pbs[exId].weight ||
+                (s.weight === pbs[exId].weight && s.reps > pbs[exId].reps)) {
+              pbs[exId] = { exerciseId: exId, weight: s.weight, reps: s.reps };
+            }
+          }
+        }
+      }
+    }
+    return Object.values(pbs);
   },
 
   // ── Dev helpers ────────────────────────────────────────────────────────────
