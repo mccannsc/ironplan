@@ -13,7 +13,6 @@ import {
 } from '../data/exercises.js?v=6';
 import { toast } from '../components/toast.js';
 import { openModal, closeModal } from '../components/modal.js';
-import { showSummary } from './summary.js';
 
 let _timerInterval = null;
 let _restInterval = null;
@@ -181,6 +180,17 @@ function _renderSessionUI(workout, session) {
         <button class="btn btn--green btn--sm" id="finish-btn">Finish ✓</button>
       </header>
 
+      <div class="session-date-row">
+        <label class="session-date-row__label" for="session-date-input">Date</label>
+        <input
+          type="date"
+          id="session-date-input"
+          class="session-date-input"
+          value="${session.date}"
+          max="${session.date}"
+        />
+      </div>
+
       <div class="session-body" id="session-body">
         ${session.exercises.map((exLog, idx) => _exerciseBlock(exLog, workout, idx)).join('')}
       </div>
@@ -221,10 +231,12 @@ function _renderSessionUI(workout, session) {
 
   // Finish
   document.getElementById('finish-btn').addEventListener('click', () => {
-    const completed = Store.completeSession();
+    Store.completeSession();
     clearInterval(_timerInterval);
-    _clearRestTimer(); // explicitly clear rest timer on completion
-    showSummary(completed, workout);
+    _clearRestTimer();
+    if (navigator.vibrate) navigator.vibrate([50, 30, 80]);
+    toast('Good job! 💪', 'success', 3000);
+    navigate('/');
   });
 
   _bindSessionEvents(workout, session);
@@ -448,6 +460,18 @@ function _bindSessionEvents(workout, session) {
         if (repsInput) repsInput.value = lastDone.reps;
       }
       return;
+    }
+  });
+
+  // Workout date change
+  document.getElementById('session-date-input')?.addEventListener('change', e => {
+    const newDate = e.target.value;
+    const today   = new Date().toISOString().slice(0, 10);
+    if (newDate && newDate <= today) {
+      session.date = newDate;
+      Store.updateSession(session);
+    } else {
+      e.target.value = session.date; // revert invalid (future) date
     }
   });
 

@@ -63,19 +63,6 @@ function _startRouter() {
   initRouter();
 }
 
-function _updateSyncIndicator(status) {
-  const el = document.getElementById('sync-indicator');
-  if (!el) return;
-  const messages = {
-    offline: 'Offline — changes will sync when back online',
-    syncing: 'Syncing…',
-    failed:  'Sync failed — tap to retry',
-  };
-  const msg = messages[status] || '';
-  el.textContent = msg;
-  el.className   = msg ? `sync-indicator sync-indicator--${status}` : 'sync-indicator sync-indicator--hidden';
-  el.onclick     = status === 'failed' ? () => Store.retrySync() : null;
-}
 
 document.addEventListener('DOMContentLoaded', async () => {
   // Wire up nav buttons
@@ -96,8 +83,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (user) {
     await Store.init(user.id);
     Store.seedDefaultWorkouts();
-    Store.onSyncStatus(_updateSyncIndicator);
-    _updateSyncIndicator(Store.getSyncStatus());
     showNav();
     _startRouter();
   } else {
@@ -110,8 +95,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (newUser) {
       await Store.init(newUser.id);
       Store.seedDefaultWorkouts();
-      Store.onSyncStatus(_updateSyncIndicator);
-      _updateSyncIndicator(Store.getSyncStatus());
       showNav();
       _startRouter();
     } else {
